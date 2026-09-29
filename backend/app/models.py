@@ -3898,6 +3898,24 @@ class HRCorporateComplianceRecord(Base):
         index=True,
     )
 
+    readiness_priority: Mapped[str] = mapped_column(
+        String(30),
+        default="normal",
+        nullable=False,
+        index=True,
+    )
+
+    action_due_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        index=True,
+    )
+
+    readiness_notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     renewal_lead_days: Mapped[int] = mapped_column(
         default=90,
         nullable=False,

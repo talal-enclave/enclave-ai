@@ -53,3 +53,14 @@ Tag: `v1.0.0`
 - Priority becomes HIGH inside 90 days and CRITICAL inside 30 days or after expiry.
 - Existing compliance records are reconciled to the 90-day rule.
 - No automatic renewal, filing, payment, or external communication is performed.
+
+## v1.0.4 pre-operational readiness register
+
+- Added a centralized Government & Corporate Pre-Operational Readiness view.
+- Reuses the authoritative corporate compliance records instead of duplicating them.
+- Adds manual readiness priority, responsible owner, action due date, and readiness notes.
+- Effective priority preserves the v1.0.3 expiry rule: 31-90 days HIGH; 0-30 days or expired CRITICAL.
+- Displays linked evidence documents from Unified Attachments.
+- No action due dates or owners are invented; unconfirmed values remain blank.
+- Existing compliance status remains authoritative in Government Compliance.
+- Production web builds use Next.js Webpack mode to avoid the observed Turbopack next/font/google internal resolver failure.

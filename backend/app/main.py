@@ -75187,3 +75187,363 @@ async def audit_phase1c_summary(
             "automatic_external_communication": False,
         },
     }
+
+
+# ============================================================
+# COMPANY PRE-OPERATIONAL READINESS REGISTER v1.0.4
+# ============================================================
+
+from datetime import datetime as _preop_datetime
+from zoneinfo import ZoneInfo as _PreopZoneInfo
+
+PREOP_READINESS_PRIORITIES = {
+    "low",
+    "normal",
+    "high",
+    "critical",
+}
+
+_PREOP_PRIORITY_WEIGHT = {
+    "low": 1,
+    "normal": 2,
+    "high": 3,
+    "critical": 4,
+}
+
+
+class PreOperationalReadinessUpdateRequest(BaseModel):
+    readiness_priority: str | None = None
+    responsible_owner: str | None = None
+    action_due_date: date | None = None
+    readiness_notes: str | None = None
+
+
+def _preop_effective_priority(row):
+    today = _preop_datetime.now(
+        _PreopZoneInfo("Asia/Riyadh")
+    ).date()
+
+    manual = str(
+        getattr(
+            row,
+            "readiness_priority",
+            "normal",
+        )
+        or "normal"
+    ).strip().lower()
+
+    if manual not in PREOP_READINESS_PRIORITIES:
+        manual = "normal"
+
+    effective = manual
+    source = "manual"
+
+    def apply_deadline(due_date, due_source):
+        nonlocal effective, source
+
+        if due_date is None:
+            return
+
+        days = (due_date - today).days
+
+        if days <= 30:
+            candidate = "critical"
+        elif days <= 90:
+            candidate = "high"
+        else:
+            candidate = "normal"
+
+        if (
+            _PREOP_PRIORITY_WEIGHT[candidate]
+            > _PREOP_PRIORITY_WEIGHT[effective]
+        ):
+            effective = candidate
+            source = due_source
+
+    apply_deadline(
+        getattr(row, "expiry_date", None),
+        "document_expiry",
+    )
+
+    apply_deadline(
+        getattr(row, "action_due_date", None),
+        "action_due_date",
+    )
+
+    return effective, source
+
+
+def _preop_needs_action(runtime_status):
+    normalized = str(
+        runtime_status or ""
+    ).strip().lower()
+
+    return normalized not in {
+        "active",
+        "registered",
+        "valid",
+        "completed",
+    }
+
+
+def _preop_readiness_payload(row, evidence_rows=None):
+    base = _corporate_compliance_payload(row)
+
+    runtime_status = base.get("status")
+    source_status = str(
+        getattr(row, "status", "")
+        or ""
+    ).strip().lower()
+
+    effective_priority, priority_source = (
+        _preop_effective_priority(row)
+    )
+
+    action_days_remaining = None
+
+    if row.action_due_date is not None:
+        today = _preop_datetime.now(
+            _PreopZoneInfo("Asia/Riyadh")
+        ).date()
+
+        action_days_remaining = (
+            row.action_due_date - today
+        ).days
+
+    evidence = []
+
+    for item in evidence_rows or []:
+        evidence.append({
+            "id": str(item.id),
+            "title": item.title,
+            "original_file_name":
+                item.original_file_name,
+            "document_type":
+                item.document_type,
+            "download_url":
+                f"/api/hr/attachments/{item.id}/download",
+        })
+
+    base.update({
+        "status":
+            source_status,
+        "source_status":
+            source_status,
+        "runtime_status":
+            runtime_status,
+        "readiness_priority":
+            row.readiness_priority,
+        "effective_priority":
+            effective_priority,
+        "priority_source":
+            priority_source,
+        "action_due_date":
+            row.action_due_date,
+        "action_days_remaining":
+            action_days_remaining,
+        "readiness_notes":
+            row.readiness_notes,
+        "needs_action":
+            _preop_needs_action(
+                source_status
+            ),
+        "evidence_count":
+            len(evidence),
+        "evidence":
+            evidence,
+    })
+
+    return base
+
+
+@app.get(
+    "/api/hr/government-compliance/readiness"
+)
+async def list_preoperational_readiness(
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(HRCorporateComplianceRecord)
+        )
+    ).scalars().all()
+
+    attachments = (
+        await db.execute(
+            select(HRAttachment).where(
+                HRAttachment.module
+                == "government_compliance",
+                HRAttachment.entity_type
+                == "corporate_compliance_record",
+                HRAttachment.status
+                == "active",
+            )
+        )
+    ).scalars().all()
+
+    evidence_map = {}
+
+    for item in attachments:
+        evidence_map.setdefault(
+            item.entity_id,
+            [],
+        ).append(item)
+
+    payload = [
+        _preop_readiness_payload(
+            row,
+            evidence_map.get(
+                row.id,
+                [],
+            ),
+        )
+        for row in rows
+    ]
+
+    rank = {
+        "critical": 0,
+        "high": 1,
+        "normal": 2,
+        "low": 3,
+    }
+
+    def sort_key(item):
+        target = (
+            item.get("action_due_date")
+            or item.get("expiry_date")
+            or "9999-12-31"
+        )
+
+        return (
+            rank.get(
+                item.get(
+                    "effective_priority",
+                    "normal",
+                ),
+                2,
+            ),
+            0 if item.get("needs_action") else 1,
+            str(target),
+            str(item.get("record_type") or ""),
+        )
+
+    payload.sort(key=sort_key)
+
+    return payload
+
+
+@app.put(
+    "/api/hr/government-compliance/readiness/{record_id}"
+)
+async def update_preoperational_readiness(
+    record_id: uuid.UUID,
+    payload: PreOperationalReadinessUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    row = (
+        await db.execute(
+            select(
+                HRCorporateComplianceRecord
+            ).where(
+                HRCorporateComplianceRecord.id
+                == record_id
+            )
+        )
+    ).scalars().first()
+
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Corporate compliance record "
+                "not found"
+            ),
+        )
+
+    fields_set = payload.model_fields_set
+
+    if "readiness_priority" in fields_set:
+        priority = str(
+            payload.readiness_priority
+            or "normal"
+        ).strip().lower()
+
+        if (
+            priority
+            not in PREOP_READINESS_PRIORITIES
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid readiness priority",
+            )
+
+        row.readiness_priority = priority
+
+    if "responsible_owner" in fields_set:
+        owner = (
+            payload.responsible_owner.strip()
+            if payload.responsible_owner
+            else ""
+        )
+
+        row.responsible_owner = owner or None
+
+    if "action_due_date" in fields_set:
+        row.action_due_date = (
+            payload.action_due_date
+        )
+
+    if "readiness_notes" in fields_set:
+        notes = (
+            payload.readiness_notes.strip()
+            if payload.readiness_notes
+            else ""
+        )
+
+        row.readiness_notes = notes or None
+
+    await write_audit_log(
+        db,
+        actor="CSSO",
+        action=(
+            "company.preoperational_"
+            "readiness_updated"
+        ),
+        details={
+            "record_id": str(row.id),
+            "record_type":
+                row.record_type,
+            "readiness_priority":
+                row.readiness_priority,
+            "responsible_owner":
+                row.responsible_owner,
+            "action_due_date": (
+                row.action_due_date.isoformat()
+                if row.action_due_date
+                else None
+            ),
+        },
+    )
+
+    await db.commit()
+    await db.refresh(row)
+
+    evidence_rows = (
+        await db.execute(
+            select(HRAttachment).where(
+                HRAttachment.module
+                == "government_compliance",
+                HRAttachment.entity_type
+                == "corporate_compliance_record",
+                HRAttachment.entity_id
+                == row.id,
+                HRAttachment.status
+                == "active",
+            )
+        )
+    ).scalars().all()
+
+    return _preop_readiness_payload(
+        row,
+        evidence_rows,
+    )

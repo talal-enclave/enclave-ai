@@ -791,6 +791,11 @@ export default function HRWorkspace() {
             >
               Government & Corporate Compliance
             </a>
+            <a
+              href="/hr/government-compliance/readiness"
+            >
+              Pre-Operational Readiness
+            </a>
 
             <a
               className="linkBtn"
