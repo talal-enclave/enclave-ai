@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="1130"
+   height="360"
+   viewBox="0 0 1130 360"
+   role="img"
+   aria-label="Enclave logo"
+   version="1.1"
+   id="svg16"
+   sodipodi:docname="Enclave-logo-horizontal-mono-white.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview16"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1" />
+  <defs
+     id="defs11">
+    <linearGradient
+       id="outerTop"
+       x1="96"
+       y1="90"
+       x2="420"
+       y2="210"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#0F4C5C"
+         id="stop1" />
+      <stop
+         offset="0.52"
+         stop-color="#18D5B7"
+         id="stop2" />
+      <stop
+         offset="1"
+         stop-color="#00A88E"
+         id="stop3" />
+    </linearGradient>
+    <linearGradient
+       id="outerBottom"
+       x1="95"
+       y1="380"
+       x2="420"
+       y2="260"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#0B1D2D"
+         id="stop4" />
+      <stop
+         offset="0.55"
+         stop-color="#0F4C5C"
+         id="stop5" />
+      <stop
+         offset="1"
+         stop-color="#00A88E"
+         id="stop6" />
+    </linearGradient>
+    <linearGradient
+       id="innerStroke"
+       x1="162"
+       y1="160"
+       x2="350"
+       y2="345"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#D9E7E6"
+         id="stop7" />
+      <stop
+         offset="0.55"
+         stop-color="#71C8C1"
+         id="stop8" />
+      <stop
+         offset="1"
+         stop-color="#0F4C5C"
+         id="stop9" />
+    </linearGradient>
+    <linearGradient
+       id="coreFill"
+       x1="170"
+       y1="165"
+       x2="345"
+       y2="340"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#142B3D"
+         id="stop10" />
+      <stop
+         offset="1"
+         stop-color="#06131E"
+         id="stop11" />
+    </linearGradient>
+    <style
+       id="style11">
+        .wordmark { font-family: 'Noto Sans Display', 'Inter Display', 'Inter', 'Arial', sans-serif; font-weight: 600; letter-spacing: 0.04em; }
+        .tagline { font-family: 'Inter Display', 'Inter', 'Arial', sans-serif; font-weight: 500; letter-spacing: 0.32em; }
+        .small { font-family: 'Inter Display', 'Inter', 'Arial', sans-serif; font-weight: 600; letter-spacing: 0.12em; }
+      </style>
+  </defs>
+  <g
+     transform="translate(55 35) scale(0.64)"
+     id="g16">
+    <path
+       d="M84 151 L256 52 L428 151 L428 216 L373 216 L373 183 L256 115 L139 183 Z"
+       fill="#F7FAFC"
+       id="path11" />
+    <path
+       d="M428 292 L428 351 L256 450 L84 351 L84 151 L139 183 L139 318 L256 385 L373 318 L373 292 Z"
+       fill="#F7FAFC"
+       id="path12" />
+    <polygon
+       points="256,146 346,198 346,302 256,354 166,302 166,198"
+       fill="none"
+       stroke="#F7FAFC"
+       stroke-width="14"
+       stroke-linejoin="miter"
+       id="polygon12" />
+    <path
+       d="M256 190 L256 320"
+       stroke="#F7FAFC"
+       stroke-width="6"
+       stroke-linecap="round"
+       id="path13" />
+    <circle
+       cx="256"
+       cy="255"
+       r="9"
+       fill="#F7FAFC"
+       id="circle13" />
+    <path
+       d="M225 213 L225 228 M225 250 L225 265 M225 287 L225 302"
+       stroke="#F7FAFC"
+       stroke-width="4"
+       stroke-linecap="round"
+       opacity="0.8"
+       id="path14" />
+    <path
+       d="M287 213 L287 228 M287 250 L287 265 M287 287 L287 302"
+       stroke="#F7FAFC"
+       stroke-width="4"
+       stroke-linecap="round"
+       opacity="0.8"
+       id="path15" />
+    <path
+       d="M318 225 L318 240 M318 274 L318 289"
+       stroke="#F7FAFC"
+       stroke-width="4"
+       stroke-linecap="round"
+       opacity="0.55"
+       id="path16" />
+  </g>
+  <path
+     d="m 481.908,240.772 h -50.82 v -94.248 h 50.82 v 14.124 h -33.132 v 24.024 h 31.02 v 14.124 h -31.02 v 27.72 h 33.132 z m 59.39991,-72.864 q 11.22,0 17.688,6.204 6.468,6.204 6.468,20.064 v 46.596 h -17.556 v -43.296 q 0,-16.104 -11.484,-16.104 -8.844,0 -12.012,6.336 -3.168,6.336 -3.168,18.084 v 34.98 h -17.556 v -71.544 h 13.464 l 2.508,9.372 h 0.792 q 3.168,-5.544 8.712,-8.052 5.544,-2.64 12.144,-2.64 z m 76.55991,74.184 q -14.784,0 -23.496,-8.844 -8.58,-8.844 -8.58,-27.852 0,-13.2 4.224,-21.384 4.356,-8.316 11.88,-12.144 7.524,-3.96 17.292,-3.96 6.072,0 11.352,1.32 5.412,1.32 8.976,3.168 l -5.28,12.804 q -3.564,-1.452 -7.128,-2.508 -3.564,-1.056 -7.26,-1.056 -16.236,0 -16.236,23.628 0,11.484 4.224,17.292 4.224,5.808 11.88,5.808 5.148,0 9.504,-1.452 4.488,-1.452 8.448,-3.96 v 14.388 q -4.092,2.376 -8.712,3.564 -4.62,1.188 -11.088,1.188 z m 57.68394,-1.32 h -17.556 v -100.32 h 17.556 z m 52.93206,-72.864 q 12.936,0 19.8,6.072 6.864,6.072 6.864,18.744 v 48.048 h -12.276 l -3.432,-9.9 h -0.528 q -4.356,5.808 -9.24,8.58 -4.752,2.64 -13.2,2.64 -8.976,0 -15.048,-5.412 -5.94,-5.412 -5.94,-16.764 0,-11.088 7.656,-16.632 7.656,-5.676 23.1,-6.204 l 11.352,-0.396 v -3.564 q 0,-6.732 -2.904,-9.636 -2.772,-3.036 -7.92,-3.036 -4.752,0 -9.636,1.584 -4.752,1.584 -9.372,3.696 l -5.412,-11.616 q 5.28,-2.772 11.88,-4.488 6.732,-1.716 14.256,-1.716 z m 1.716,39.336 q -9.504,0.396 -13.2,3.828 -3.564,3.3 -3.564,8.976 0,5.148 2.508,7.392 2.64,2.112 6.864,2.112 6.204,0 10.56,-4.092 4.356,-4.224 4.356,-12.408 v -6.072 z m 65.07592,33.528 -25.74,-71.544 h 18.348 l 12.804,41.316 q 1.188,3.828 2.112,8.448 0.924,4.62 1.056,7.788 h 0.528 q 0.396,-3.3 1.32,-7.788 0.924,-4.62 2.112,-8.448 l 12.936,-41.316 h 18.348 l -25.74,71.544 z m 86.72405,-72.864 q 13.86,0 21.912,8.58 8.052,8.58 8.052,23.892 v 8.448 h -43.824 q 0.132,9.768 4.62,15.18 4.62,5.28 13.068,5.28 6.468,0 11.616,-1.32 5.28,-1.452 10.824,-4.092 v 13.332 q -5.016,2.508 -10.56,3.696 -5.412,1.188 -13.2,1.188 -10.032,0 -17.82,-3.96 -7.656,-4.092 -12.012,-12.276 -4.356,-8.184 -4.356,-20.328 0,-18.348 8.712,-27.984 8.712,-9.636 22.968,-9.636 z m 0.264,12.276 q -5.94,0 -9.636,4.356 -3.564,4.224 -4.224,12.672 h 26.928 q 0,-7.392 -3.3,-12.144 -3.168,-4.884 -9.768,-4.884 z"
+     id="text16"
+     class="wordmark"
+     style="font-weight:600;font-size:132px;font-family:'Noto Sans Display', 'Inter Display', Inter, Arial, sans-serif;letter-spacing:0.04em;dominant-baseline:middle;fill:#f7fafc"
+     aria-label="Enclave" />
+</svg>

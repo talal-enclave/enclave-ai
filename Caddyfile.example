@@ -1,0 +1,10 @@
+91-99-163-193.sslip.io {
+    encode zstd gzip
+
+    basic_auth {
+        talal {$CADDY_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy /api/* api:8000
+    reverse_proxy web:3000
+}

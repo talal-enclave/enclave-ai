@@ -1,0 +1,1388 @@
+:root {
+  --enclave-ink: #06131e;
+  --enclave-deep: #0b1d2d;
+  --enclave-core: #142b3d;
+  --enclave-slate: #0f4c5c;
+  --enclave-teal: #00a88e;
+  --enclave-glow: #18d5b7;
+  --enclave-mint: #71c8c1;
+  --enclave-pale: #d9e7e6;
+  --enclave-white: #f7fafc;
+  --enclave-border: rgba(113, 200, 193, 0.18);
+  --enclave-border-strong: rgba(24, 213, 183, 0.38);
+  --enclave-shadow: 0 18px 60px rgba(0, 0, 0, 0.24);
+}
+
+html,
+body {
+  min-height: 100%;
+  background: var(--enclave-ink);
+}
+
+body {
+  color: var(--enclave-white);
+}
+
+.enclave-system-shell {
+  min-height: 100vh;
+  color: var(--enclave-white);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(24, 213, 183, 0.11), transparent 28%),
+    radial-gradient(circle at 86% 8%, rgba(15, 76, 92, 0.25), transparent 24%),
+    linear-gradient(180deg, var(--enclave-deep) 0%, var(--enclave-ink) 52%, #041019 100%);
+  font-family: var(--font-ar), var(--font-en), sans-serif;
+}
+
+.enclave-system-shell *,
+.enclave-system-shell *::before,
+.enclave-system-shell *::after {
+  box-sizing: border-box;
+}
+
+.enclave-system-topbar {
+  min-height: 76px;
+  padding: 10px 24px;
+  display: grid;
+  grid-template-columns: 250px minmax(280px, 1fr) minmax(310px, auto);
+  align-items: center;
+  gap: 18px;
+  position: sticky;
+  top: 0;
+  z-index: 80;
+  border-bottom: 1px solid var(--enclave-border);
+  background: rgba(6, 19, 30, 0.94);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 10px 38px rgba(0, 0, 0, 0.24);
+}
+
+.enclave-system-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--enclave-white);
+  text-decoration: none;
+  direction: ltr;
+}
+
+.enclave-system-brand img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.enclave-system-brand > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.enclave-system-brand strong {
+  font-family: var(--font-en), sans-serif;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+}
+
+.enclave-system-brand span {
+  margin-top: 1px;
+  color: var(--enclave-mint);
+  font-family: var(--font-en), sans-serif;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.enclave-system-context {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+}
+
+.enclave-system-context-icon {
+  width: 43px;
+  height: 43px;
+  flex: 0 0 43px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--enclave-ink);
+  background: linear-gradient(135deg, var(--enclave-pale), var(--enclave-glow));
+  box-shadow: 0 0 28px rgba(24, 213, 183, 0.14);
+  font-family: var(--font-en), sans-serif;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.enclave-system-context > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.enclave-system-context small {
+  color: var(--enclave-glow);
+  font-family: var(--font-en), sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.enclave-system-context strong {
+  margin-top: 2px;
+  font-size: 15px;
+}
+
+.enclave-system-context div > span {
+  margin-top: 1px;
+  color: var(--enclave-mint);
+  font-family: var(--font-en), sans-serif;
+  font-size: 9px;
+}
+
+.enclave-system-utilities {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.enclave-system-utilities a {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid rgba(113, 200, 193, 0.14);
+  border-radius: 9px;
+  color: #b7d7d5;
+  background: rgba(255, 255, 255, 0.02);
+  text-decoration: none;
+  font-size: 10px;
+  white-space: nowrap;
+  transition: 0.18s ease;
+}
+
+.enclave-system-utilities a > span {
+  color: var(--enclave-glow);
+  font-family: var(--font-en), sans-serif;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.enclave-system-utilities a:hover,
+.enclave-system-utilities a.is-active {
+  color: var(--enclave-white);
+  border-color: var(--enclave-border-strong);
+  background: rgba(24, 213, 183, 0.07);
+}
+
+.enclave-system-utilities .enclave-system-home-link {
+  color: var(--enclave-ink);
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--enclave-glow), var(--enclave-teal));
+  font-weight: 700;
+}
+
+.enclave-office-rail {
+  min-height: 94px;
+  padding: 10px 22px;
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid rgba(113, 200, 193, 0.11);
+  background:
+    linear-gradient(90deg, rgba(15, 76, 92, 0.20), rgba(6, 19, 30, 0.58)),
+    var(--enclave-deep);
+}
+
+.enclave-office-rail-title {
+  display: flex;
+  flex-direction: column;
+  padding-inline: 4px;
+}
+
+.enclave-office-rail-title span {
+  color: var(--enclave-glow);
+  font-family: var(--font-en), sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.enclave-office-rail-title strong {
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+.enclave-office-rail-scroll {
+  min-width: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(130px, 1fr);
+  gap: 7px;
+  overflow-x: auto;
+  padding: 2px 0 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--enclave-slate) transparent;
+}
+
+.enclave-office-door {
+  min-width: 130px;
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid rgba(113, 200, 193, 0.13);
+  border-radius: 10px;
+  color: #c9dfde;
+  background:
+    linear-gradient(180deg, rgba(20, 43, 61, 0.84), rgba(11, 29, 45, 0.86));
+  text-decoration: none;
+  transition: 0.18s ease;
+}
+
+.enclave-office-door:hover,
+.enclave-office-door.is-active {
+  transform: translateY(-1px);
+  color: var(--enclave-white);
+  border-color: rgba(24, 213, 183, 0.42);
+  background:
+    linear-gradient(180deg, rgba(15, 76, 92, 0.72), rgba(11, 29, 45, 0.92));
+  box-shadow: inset 0 0 22px rgba(24, 213, 183, 0.04), 0 8px 20px rgba(0, 0, 0, 0.18);
+}
+
+.enclave-office-door-icon {
+  width: 37px;
+  height: 47px;
+  flex: 0 0 37px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(113, 200, 193, 0.24);
+  border-radius: 5px 5px 8px 8px;
+  background:
+    linear-gradient(180deg, rgba(24, 213, 183, 0.10), rgba(15, 76, 92, 0.22));
+}
+
+.enclave-office-door-icon::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  right: 7px;
+  height: 1px;
+  background: rgba(217, 231, 230, 0.22);
+  box-shadow: 0 7px 0 rgba(217, 231, 230, 0.12);
+}
+
+.enclave-office-door-icon b {
+  margin-top: 13px;
+  font-family: var(--font-en), sans-serif;
+  font-size: 8px;
+}
+
+.enclave-office-door-icon i {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--enclave-glow);
+  box-shadow: 0 0 8px rgba(24, 213, 183, 0.82);
+}
+
+.enclave-office-door-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.enclave-office-door-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.enclave-office-door-copy small {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7faeae;
+  font-family: var(--font-en), sans-serif;
+  font-size: 7px;
+}
+
+.enclave-system-content {
+  min-height: calc(100vh - 250px);
+}
+
+.enclave-system-content > main {
+  background: transparent !important;
+  color: var(--enclave-white) !important;
+  font-family: var(--font-ar), var(--font-en), sans-serif !important;
+}
+
+.enclave-system-content input:not([type="checkbox"]):not([type="radio"]),
+.enclave-system-content select,
+.enclave-system-content textarea {
+  color: var(--enclave-white) !important;
+  background: rgba(11, 29, 45, 0.84) !important;
+  border-color: rgba(113, 200, 193, 0.22) !important;
+}
+
+.enclave-system-content input::placeholder,
+.enclave-system-content textarea::placeholder {
+  color: #638f91 !important;
+}
+
+.enclave-system-content input:focus,
+.enclave-system-content select:focus,
+.enclave-system-content textarea:focus {
+  outline: none !important;
+  border-color: rgba(24, 213, 183, 0.56) !important;
+  box-shadow: 0 0 0 3px rgba(24, 213, 183, 0.06) !important;
+}
+
+.enclave-system-content table {
+  border-color: rgba(113, 200, 193, 0.14) !important;
+}
+
+.enclave-system-content th {
+  color: var(--enclave-pale) !important;
+  background: rgba(15, 76, 92, 0.28) !important;
+  border-color: rgba(113, 200, 193, 0.14) !important;
+}
+
+.enclave-system-content td {
+  border-color: rgba(113, 200, 193, 0.09) !important;
+}
+
+.enclave-system-content a:not(.enclave-system-brand):not(.enclave-office-door) {
+  text-decoration-color: rgba(24, 213, 183, 0.24);
+}
+
+.enclave-system-content .fin-page,
+.enclave-system-content .sc-page,
+.enclave-system-content .cc-page,
+.enclave-system-content .di-page,
+.enclave-system-content .p9-page,
+.enclave-system-content .page {
+  background: transparent !important;
+  color: var(--enclave-white) !important;
+}
+
+.enclave-system-content .fin-hero,
+.enclave-system-content .sc-hero,
+.enclave-system-content .cc-hero,
+.enclave-system-content .di-hero,
+.enclave-system-content .p9-hero {
+  color: var(--enclave-white) !important;
+  border: 1px solid rgba(24, 213, 183, 0.22) !important;
+  background:
+    linear-gradient(135deg, rgba(15, 76, 92, 0.50), rgba(11, 29, 45, 0.96)) !important;
+  box-shadow: var(--enclave-shadow) !important;
+}
+
+.enclave-system-content .fin-panel,
+.enclave-system-content .fin-summary-card,
+.enclave-system-content .sc-panel,
+.enclave-system-content .sc-card,
+.enclave-system-content .cc-panel,
+.enclave-system-content .cc-card,
+.enclave-system-content .di-panel,
+.enclave-system-content .di-summary-card,
+.enclave-system-content .p9-panel,
+.enclave-system-content .p9-card {
+  color: var(--enclave-white) !important;
+  border-color: rgba(113, 200, 193, 0.15) !important;
+  background: rgba(11, 29, 45, 0.82) !important;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.14) !important;
+}
+
+.enclave-system-content .fin-muted,
+.enclave-system-content .fin-summary-label,
+.enclave-system-content .fin-summary-hint,
+.enclave-system-content .sc-muted,
+.enclave-system-content .sc-card-title,
+.enclave-system-content .sc-card-hint,
+.enclave-system-content .cc-card-title,
+.enclave-system-content .cc-card-hint,
+.enclave-system-content .di-muted,
+.enclave-system-content .di-summary-label,
+.enclave-system-content .di-summary-hint,
+.enclave-system-content .p9-muted {
+  color: #89b0b1 !important;
+}
+
+.enclave-system-footer {
+  min-height: 54px;
+  padding: 13px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-top: 1px solid rgba(113, 200, 193, 0.10);
+  color: #769fa0;
+  background: rgba(4, 16, 25, 0.90);
+  font-size: 9px;
+}
+
+.enclave-system-footer > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-en), sans-serif;
+}
+
+.enclave-system-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--enclave-glow);
+  box-shadow: 0 0 10px rgba(24, 213, 183, 0.90);
+}
+
+@media (max-width: 1180px) {
+  .enclave-system-topbar {
+    grid-template-columns: 210px 1fr;
+  }
+
+  .enclave-system-utilities {
+    grid-column: 1 / -1;
+    justify-content: center;
+    padding-bottom: 4px;
+  }
+
+  .enclave-office-rail {
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .enclave-system-topbar {
+    position: relative;
+    grid-template-columns: 1fr;
+    padding: 12px 14px;
+  }
+
+  .enclave-system-brand,
+  .enclave-system-context {
+    justify-content: center;
+  }
+
+  .enclave-system-utilities {
+    grid-column: 1;
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+
+  .enclave-office-rail {
+    grid-template-columns: 1fr;
+    padding: 10px 14px;
+  }
+
+  .enclave-office-rail-title {
+    display: none;
+  }
+
+  .enclave-office-rail-scroll {
+    grid-auto-columns: minmax(118px, 145px);
+  }
+
+  .enclave-system-footer {
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+  }
+}
+
+/* =========================================================
+   ENCLAVE UI PHASE 3 - OFFICE INTERIORS
+   ========================================================= */
+
+.enclave-office-interior {
+  max-width: 1500px;
+  min-height: 248px;
+  margin: 18px auto 0;
+  display: grid;
+  grid-template-columns: minmax(360px, 0.92fr) minmax(500px, 1.08fr);
+  overflow: hidden;
+  border: 1px solid rgba(113, 200, 193, 0.20);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(15, 76, 92, 0.25), rgba(11, 29, 45, 0.94));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 20px 54px rgba(0, 0, 0, 0.19);
+}
+
+.enclave-office-interior-copy {
+  padding: 28px 30px 24px;
+  align-self: center;
+}
+
+.enclave-office-interior-kicker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--enclave-glow);
+  font-family: var(--font-en), sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+.enclave-office-interior-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--enclave-glow);
+  box-shadow: 0 0 12px rgba(24, 213, 183, 0.86);
+}
+
+.enclave-office-interior h1 {
+  margin: 9px 0 6px;
+  color: var(--enclave-white);
+  font-size: clamp(24px, 2.6vw, 36px);
+  line-height: 1.25;
+}
+
+.enclave-office-interior p {
+  max-width: 620px;
+  margin: 0;
+  color: #91b8b7;
+  font-size: 11px;
+  line-height: 1.9;
+}
+
+.enclave-office-subnav {
+  max-width: 680px;
+  margin-top: 18px;
+  padding-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--enclave-slate) transparent;
+}
+
+.enclave-office-subnav a {
+  flex: 0 0 auto;
+  min-height: 33px;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 10px;
+  border: 1px solid rgba(113, 200, 193, 0.13);
+  border-radius: 8px;
+  color: #9fc3c2;
+  background: rgba(255, 255, 255, 0.018);
+  text-decoration: none;
+  font-size: 9px;
+  transition: 0.16s ease;
+}
+
+.enclave-office-subnav a:hover,
+.enclave-office-subnav a.is-active {
+  color: var(--enclave-white);
+  border-color: rgba(24, 213, 183, 0.38);
+  background: rgba(24, 213, 183, 0.07);
+  box-shadow: inset 0 0 16px rgba(24, 213, 183, 0.03);
+}
+
+.enclave-office-scene {
+  min-height: 248px;
+  position: relative;
+  overflow: hidden;
+  border-right: 1px solid rgba(113, 200, 193, 0.11);
+  background:
+    radial-gradient(circle at 50% 12%, rgba(24, 213, 183, 0.11), transparent 34%),
+    linear-gradient(180deg, rgba(15, 76, 92, 0.36), rgba(6, 19, 30, 0.92));
+}
+
+.enclave-office-scene::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(115deg, transparent 0 39%, rgba(217, 231, 230, 0.035) 39% 40%, transparent 40% 100%);
+}
+
+.enclave-office-scene-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.18;
+  background-image:
+    linear-gradient(rgba(113, 200, 193, 0.17) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(113, 200, 193, 0.17) 1px, transparent 1px);
+  background-size: 58px 58px;
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,.8) 60%, transparent 100%);
+}
+
+.enclave-office-wall-panel {
+  position: absolute;
+  top: 25px;
+  width: 112px;
+  height: 74px;
+  padding: 10px;
+  border: 1px solid rgba(24, 213, 183, 0.24);
+  border-radius: 8px;
+  background: rgba(6, 32, 42, 0.66);
+  box-shadow: inset 0 0 20px rgba(24, 213, 183, 0.025);
+}
+
+.enclave-office-wall-panel-right {
+  right: 28px;
+}
+
+.enclave-office-wall-panel-left {
+  left: 28px;
+}
+
+.enclave-office-wall-panel small {
+  display: block;
+  color: #719fa0;
+  font-family: var(--font-en), sans-serif;
+  font-size: 7px;
+  letter-spacing: 0.1em;
+}
+
+.enclave-office-wall-panel strong {
+  display: block;
+  margin: 5px 0 7px;
+  color: var(--enclave-glow);
+  font-family: var(--font-en), sans-serif;
+  font-size: 15px;
+}
+
+.enclave-office-wall-panel-right > i {
+  display: block;
+  width: 72%;
+  height: 3px;
+  margin-top: 5px;
+  border-radius: 4px;
+  background: rgba(113, 200, 193, 0.27);
+}
+
+.enclave-office-wall-panel-right > i:nth-of-type(2) {
+  width: 52%;
+}
+
+.enclave-office-wall-panel-right > i:nth-of-type(3) {
+  width: 64%;
+}
+
+.enclave-office-mini-bars {
+  height: 39px;
+  margin-top: 6px;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.enclave-office-mini-bars i {
+  width: 8px;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, var(--enclave-glow), var(--enclave-teal));
+}
+
+.enclave-office-mini-bars i:nth-child(1) { height: 16px; }
+.enclave-office-mini-bars i:nth-child(2) { height: 28px; }
+.enclave-office-mini-bars i:nth-child(3) { height: 22px; }
+.enclave-office-mini-bars i:nth-child(4) { height: 36px; }
+
+.enclave-office-agent {
+  position: absolute;
+  left: 50%;
+  bottom: 76px;
+  width: 56px;
+  height: 86px;
+  transform: translateX(-50%);
+  z-index: 4;
+}
+
+.enclave-office-agent-head {
+  position: absolute;
+  top: 0;
+  left: 15px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #f7fafc, #d9e7e6);
+  box-shadow: 0 0 22px rgba(217, 231, 230, 0.17);
+}
+
+.enclave-office-agent-body {
+  position: absolute;
+  top: 31px;
+  left: 7px;
+  width: 42px;
+  height: 54px;
+  border-radius: 17px 17px 5px 5px;
+  background: linear-gradient(180deg, #f7fafc, #a8cfcc);
+}
+
+.enclave-office-monitor {
+  position: absolute;
+  left: calc(50% + 56px);
+  bottom: 83px;
+  width: 76px;
+  height: 48px;
+  z-index: 5;
+  border: 3px solid #174554;
+  border-radius: 5px;
+  background: #06131e;
+  box-shadow: 0 0 18px rgba(24, 213, 183, 0.10);
+}
+
+.enclave-office-monitor span {
+  position: absolute;
+  inset: 7px;
+  background:
+    linear-gradient(180deg, rgba(24, 213, 183, 0.15), transparent),
+    repeating-linear-gradient(
+      180deg,
+      rgba(113, 200, 193, 0.23) 0 2px,
+      transparent 2px 7px
+    );
+}
+
+.enclave-office-monitor i {
+  position: absolute;
+  left: 50%;
+  bottom: -15px;
+  width: 3px;
+  height: 12px;
+  transform: translateX(-50%);
+  background: #174554;
+}
+
+.enclave-office-desk {
+  position: absolute;
+  left: 50%;
+  bottom: 51px;
+  width: 310px;
+  height: 59px;
+  transform: translateX(-50%);
+  z-index: 3;
+  border: 1px solid rgba(113, 200, 193, 0.13);
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, #155064 0 15px, #0b2635 15px 100%);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.29);
+}
+
+.enclave-office-desk span {
+  position: absolute;
+  top: 14px;
+  right: 27px;
+  width: 32px;
+  height: 5px;
+  border-radius: 4px;
+  background: rgba(113, 200, 193, 0.24);
+}
+
+.enclave-office-chair {
+  position: absolute;
+  left: calc(50% - 130px);
+  bottom: 35px;
+  width: 42px;
+  height: 63px;
+  z-index: 2;
+  border: 2px solid rgba(113, 200, 193, 0.24);
+  border-radius: 14px 14px 5px 5px;
+  transform: perspective(100px) rotateY(-8deg);
+}
+
+.enclave-office-plant {
+  position: absolute;
+  bottom: 47px;
+  width: 50px;
+  height: 91px;
+  z-index: 3;
+}
+
+.enclave-office-plant-a {
+  right: 17px;
+}
+
+.enclave-office-plant-b {
+  left: 16px;
+}
+
+.enclave-office-plant span {
+  position: absolute;
+  bottom: 0;
+  left: 11px;
+  width: 28px;
+  height: 28px;
+  border-radius: 3px 3px 9px 9px;
+  background: linear-gradient(180deg, var(--enclave-pale), #86aaa9);
+}
+
+.enclave-office-plant i {
+  position: absolute;
+  bottom: 22px;
+  left: 22px;
+  width: 8px;
+  height: 50px;
+  border-radius: 100% 0 100% 0;
+  transform-origin: bottom;
+  background: linear-gradient(180deg, var(--enclave-glow), #0c6b62);
+}
+
+.enclave-office-plant i:nth-child(1) { transform: rotate(-42deg); }
+.enclave-office-plant i:nth-child(2) { transform: rotate(0deg) scale(1.08); }
+.enclave-office-plant i:nth-child(3) { transform: rotate(43deg); }
+
+.enclave-office-floor-line {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  bottom: 37px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(113, 200, 193, 0.42), transparent);
+  box-shadow: 0 7px 28px rgba(24, 213, 183, 0.10);
+}
+
+.enclave-system-content {
+  padding-top: 12px;
+}
+
+.enclave-system-content > main {
+  min-height: auto !important;
+}
+
+.enclave-system-content > main > section:first-child,
+.enclave-system-content > main > div:first-child {
+  scroll-margin-top: 190px;
+}
+
+@media (max-width: 1180px) {
+  .enclave-office-interior {
+    margin-left: 16px;
+    margin-right: 16px;
+    grid-template-columns: minmax(330px, 0.9fr) minmax(420px, 1.1fr);
+  }
+}
+
+@media (max-width: 860px) {
+  .enclave-office-interior {
+    grid-template-columns: 1fr;
+  }
+
+  .enclave-office-scene {
+    min-height: 220px;
+    border-right: 0;
+    border-top: 1px solid rgba(113, 200, 193, 0.11);
+  }
+
+  .enclave-office-interior-copy {
+    padding: 22px;
+  }
+}
+
+@media (max-width: 520px) {
+  .enclave-office-interior {
+    margin: 12px 10px 0;
+    border-radius: 14px;
+  }
+
+  .enclave-office-wall-panel {
+    transform: scale(0.82);
+  }
+
+  .enclave-office-wall-panel-right {
+    right: 8px;
+    transform-origin: top right;
+  }
+
+  .enclave-office-wall-panel-left {
+    left: 8px;
+    transform-origin: top left;
+  }
+
+  .enclave-office-desk {
+    width: 260px;
+  }
+
+  .enclave-office-plant-b {
+    display: none;
+  }
+}
+
+/* =========================================================
+   ENCLAVE UI PHASE 4 - FINAL VISUAL POLISH
+   ========================================================= */
+
+.enclave-system-content {
+  position: relative;
+}
+
+.enclave-system-content > main {
+  width: min(1500px, calc(100% - 32px)) !important;
+  margin-inline: auto !important;
+  padding-top: 20px !important;
+  padding-bottom: 34px !important;
+}
+
+.enclave-system-content > main > section,
+.enclave-system-content > main > div {
+  border-radius: 14px;
+}
+
+.enclave-system-content button,
+.enclave-system-content a,
+.enclave-system-content input,
+.enclave-system-content select,
+.enclave-system-content textarea {
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease,
+    color 0.16s ease;
+}
+
+.enclave-system-content button {
+  border-radius: 9px !important;
+}
+
+.enclave-system-content button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+
+.enclave-system-content button:disabled {
+  opacity: 0.52 !important;
+  cursor: not-allowed !important;
+}
+
+.enclave-system-content input:not([type="checkbox"]):not([type="radio"]),
+.enclave-system-content select,
+.enclave-system-content textarea {
+  min-height: 40px;
+  border-radius: 9px !important;
+}
+
+.enclave-system-content textarea {
+  min-height: 92px;
+}
+
+.enclave-system-content table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background: rgba(8, 28, 39, 0.66);
+  box-shadow: inset 0 0 0 1px rgba(113, 200, 193, 0.08);
+}
+
+.enclave-system-content thead th:first-child {
+  border-top-right-radius: 10px;
+}
+
+.enclave-system-content thead th:last-child {
+  border-top-left-radius: 10px;
+}
+
+.enclave-system-content th,
+.enclave-system-content td {
+  line-height: 1.65 !important;
+}
+
+.enclave-system-content tbody tr {
+  transition: background-color 0.14s ease;
+}
+
+.enclave-system-content tbody tr:hover {
+  background: rgba(24, 213, 183, 0.035) !important;
+}
+
+.enclave-system-content hr {
+  border: 0 !important;
+  border-top: 1px solid rgba(113, 200, 193, 0.10) !important;
+}
+
+.enclave-system-content ::selection {
+  color: #06131e;
+  background: #71c8c1;
+}
+
+.enclave-system-content ::-webkit-scrollbar,
+.enclave-office-rail-scroll::-webkit-scrollbar,
+.enclave-office-subnav::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.enclave-system-content ::-webkit-scrollbar-track,
+.enclave-office-rail-scroll::-webkit-scrollbar-track,
+.enclave-office-subnav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.enclave-system-content ::-webkit-scrollbar-thumb,
+.enclave-office-rail-scroll::-webkit-scrollbar-thumb,
+.enclave-office-subnav::-webkit-scrollbar-thumb {
+  border-radius: 99px;
+  background: rgba(113, 200, 193, 0.22);
+}
+
+.enclave-system-content ::-webkit-scrollbar-thumb:hover,
+.enclave-office-rail-scroll::-webkit-scrollbar-thumb:hover,
+.enclave-office-subnav::-webkit-scrollbar-thumb:hover {
+  background: rgba(24, 213, 183, 0.34);
+}
+
+.enclave-system-shell {
+  background-attachment: fixed;
+}
+
+.enclave-system-topbar {
+  border-bottom-color: rgba(113, 200, 193, 0.14);
+}
+
+.enclave-office-rail {
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.015);
+}
+
+.enclave-office-door {
+  position: relative;
+  overflow: hidden;
+}
+
+.enclave-office-door::after {
+  content: "";
+  position: absolute;
+  inset-inline: 10px;
+  bottom: 0;
+  height: 2px;
+  opacity: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--enclave-glow),
+    transparent
+  );
+  transition: opacity 0.18s ease;
+}
+
+.enclave-office-door:hover::after,
+.enclave-office-door.is-active::after {
+  opacity: 0.9;
+}
+
+.enclave-office-door.is-active .enclave-office-door-icon {
+  border-color: rgba(24, 213, 183, 0.45);
+  box-shadow: inset 0 0 18px rgba(24, 213, 183, 0.05);
+}
+
+.enclave-office-interior {
+  position: relative;
+}
+
+.enclave-office-interior::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    inset 0 -1px 0 rgba(24, 213, 183, 0.025);
+}
+
+.enclave-office-subnav a.is-active {
+  box-shadow:
+    inset 0 0 18px rgba(24, 213, 183, 0.04),
+    0 5px 16px rgba(0, 0, 0, 0.14);
+}
+
+.enclave-system-footer {
+  border-top-color: rgba(113, 200, 193, 0.09);
+}
+
+/* ----- Known module card systems ----- */
+
+.enclave-system-content .fin-card,
+.enclave-system-content .fin-summary-card,
+.enclave-system-content .fin-panel,
+.enclave-system-content .sc-card,
+.enclave-system-content .sc-panel,
+.enclave-system-content .so-card,
+.enclave-system-content .so-panel,
+.enclave-system-content .ld-card,
+.enclave-system-content .ld-panel,
+.enclave-system-content .cc-card,
+.enclave-system-content .cc-panel,
+.enclave-system-content .di-card,
+.enclave-system-content .di-panel,
+.enclave-system-content .di-summary-card,
+.enclave-system-content .p9-card,
+.enclave-system-content .p9-panel {
+  border-radius: 13px !important;
+  border-color: rgba(113, 200, 193, 0.14) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.018),
+    0 10px 30px rgba(0, 0, 0, 0.12) !important;
+}
+
+.enclave-system-content .fin-card:hover,
+.enclave-system-content .fin-summary-card:hover,
+.enclave-system-content .sc-card:hover,
+.enclave-system-content .so-card:hover,
+.enclave-system-content .ld-card:hover,
+.enclave-system-content .cc-card:hover,
+.enclave-system-content .di-card:hover,
+.enclave-system-content .di-summary-card:hover,
+.enclave-system-content .p9-card:hover {
+  border-color: rgba(24, 213, 183, 0.25) !important;
+}
+
+.enclave-system-content .fin-hero,
+.enclave-system-content .sc-hero,
+.enclave-system-content .so-hero,
+.enclave-system-content .ld-hero,
+.enclave-system-content .cc-hero,
+.enclave-system-content .di-hero,
+.enclave-system-content .p9-hero {
+  border-radius: 16px !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 16px 42px rgba(0, 0, 0, 0.16) !important;
+}
+
+.enclave-system-content .fin-tabs,
+.enclave-system-content .sc-tabs,
+.enclave-system-content .so-tabs,
+.enclave-system-content .ld-tabs,
+.enclave-system-content .cc-tabs,
+.enclave-system-content .di-tabs,
+.enclave-system-content .p9-tabs {
+  gap: 6px !important;
+}
+
+.enclave-system-content .fin-tab,
+.enclave-system-content .sc-tab,
+.enclave-system-content .so-tab,
+.enclave-system-content .ld-tab,
+.enclave-system-content .cc-tab,
+.enclave-system-content .di-tab,
+.enclave-system-content .p9-tab {
+  border-radius: 8px !important;
+}
+
+.enclave-system-content .fin-tab.active,
+.enclave-system-content .sc-tab.active,
+.enclave-system-content .so-tab.active,
+.enclave-system-content .ld-tab.active,
+.enclave-system-content .cc-tab-active,
+.enclave-system-content .di-tab.active,
+.enclave-system-content .p9-tab.active {
+  color: #f7fafc !important;
+  border-color: rgba(24, 213, 183, 0.35) !important;
+  background: rgba(24, 213, 183, 0.08) !important;
+}
+
+/* ----- Generic light remnants inside module workspaces ----- */
+
+.enclave-system-content [style*="background: white"],
+.enclave-system-content [style*="background:white"],
+.enclave-system-content [style*='background: "#fff"'],
+.enclave-system-content [style*='background:"#fff"'] {
+  color: var(--enclave-white) !important;
+  background: rgba(11, 29, 45, 0.86) !important;
+  border-color: rgba(113, 200, 193, 0.14) !important;
+}
+
+/* ----- Status surfaces retain semantic distinction ----- */
+
+.enclave-system-content [style*="#321d26"] {
+  color: #ffc3cb !important;
+}
+
+.enclave-system-content [style*="#0b302b"] {
+  color: #b8f5e7 !important;
+}
+
+.enclave-system-content [style*="#332b17"] {
+  color: #f6dc91 !important;
+}
+
+.enclave-system-content [style*="#102b3d"] {
+  color: #b7dbff !important;
+}
+
+@media (max-width: 760px) {
+  .enclave-system-content > main {
+    width: min(100% - 20px, 1500px) !important;
+    padding-top: 12px !important;
+    padding-bottom: 24px !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enclave-system-content *,
+  .enclave-office-door,
+  .enclave-office-subnav a {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* =========================================================
+   ENCLAVE UI VISUAL FIX 1B
+   Duplicate identity cleanup only.
+   IMPORTANT: no width / scale / sizing changes.
+   ========================================================= */
+
+/* HR:
+   Phase 3 Office Interior + sub-navigation now own the page identity.
+   Keep only the real refresh button from the legacy header. */
+.enclave-system-content[data-office="hr"] .header {
+  min-height: 42px !important;
+  margin-bottom: 12px !important;
+  padding: 0 !important;
+  justify-content: flex-end !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.enclave-system-content[data-office="hr"] .header .brand {
+  display: none !important;
+}
+
+.enclave-system-content[data-office="hr"] .header .actions {
+  width: auto !important;
+  margin: 0 !important;
+  gap: 0 !important;
+}
+
+.enclave-system-content[data-office="hr"] .header .actions .linkBtn {
+  display: none !important;
+}
+
+.enclave-system-content[data-office="hr"] .header .actions .btn {
+  min-height: 38px;
+  padding: 8px 14px !important;
+  border: 1px solid rgba(24, 213, 183, .34) !important;
+  border-radius: 9px !important;
+  color: #d9fff8 !important;
+  background: rgba(24, 213, 183, .07) !important;
+  box-shadow: none !important;
+}
+
+/* Finance:
+   All navigation previously shown in the hero exists in the new
+   Office Interior sub-navigation. */
+.enclave-system-content[data-office="finance"] .fin-hero {
+  display: none !important;
+}
+
+.enclave-system-content[data-office="finance"] .fin-tabs {
+  margin-top: 0 !important;
+}
+
+/* Sales: legacy hero only repeats title/back navigation. */
+.enclave-system-content[data-office="sales"] .sc-hero {
+  display: none !important;
+}
+
+/* Procurement:
+   Preserve the real refresh action, remove repeated title and shortcut links. */
+.enclave-system-content[data-office="procurement"] .p9-hero {
+  min-height: 42px !important;
+  margin: 0 0 12px !important;
+  padding: 0 !important;
+  justify-content: flex-end !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.enclave-system-content[data-office="procurement"] .p9-hero > div:first-child {
+  display: none !important;
+}
+
+.enclave-system-content[data-office="procurement"] .p9-actions {
+  width: auto !important;
+  margin: 0 !important;
+}
+
+.enclave-system-content[data-office="procurement"] .p9-actions .p9-link {
+  display: none !important;
+}
+
+.enclave-system-content[data-office="procurement"] .p9-actions .p9-btn {
+  min-height: 38px !important;
+  padding: 8px 14px !important;
+  border-color: rgba(24, 213, 183, .34) !important;
+  color: #d9fff8 !important;
+  background: rgba(24, 213, 183, .07) !important;
+}
+
+/* Company Control: its warning/reference notice remains immediately below. */
+.enclave-system-content[data-office="governance"] .cc-hero {
+  display: none !important;
+}
+
+/* Document Intelligence:
+   Keep its unique workflow and human-approval safety statement,
+   remove only the repeated identity copy. */
+.enclave-system-content[data-office="documents"] .di-hero {
+  min-height: auto !important;
+  margin-bottom: 14px !important;
+  padding: 12px 14px !important;
+  align-items: center !important;
+  border-radius: 12px !important;
+}
+
+.enclave-system-content[data-office="documents"] .di-eyebrow,
+.enclave-system-content[data-office="documents"] .di-title,
+.enclave-system-content[data-office="documents"] .di-subtitle {
+  display: none !important;
+}
+
+.enclave-system-content[data-office="documents"] .di-workflow {
+  margin: 0 !important;
+}
+
+/* Inline legacy identity sections:
+   Keep module content, notices, forms and summaries intact.
+   These first sections contain only repeated identity/navigation shortcuts
+   for these modules after the Phase 3 shell was installed. */
+.enclave-system-content[data-office="marketing"] > main > div > section:first-child,
+.enclave-system-content[data-office="admin"] > main > div > section:first-child,
+.enclave-system-content[data-office="legal"] > main > div > section:first-child,
+.enclave-system-content[data-office="it"] > main > div > section:first-child,
+.enclave-system-content[data-office="audit"] > main > div > section:first-child {
+  display: none !important;
+}
+
+/* Do not alter global page sizing. */
+
+/* =========================================================
+   ENCLAVE UI FINAL MICRO POLISH
+   Brand mark cleanup + HR refresh alignment only.
+   No sizing/layout redesign.
+   ========================================================= */
+
+/* HR refresh action belongs with the HR content flow.
+   In RTL, flex-start keeps it at the right/content edge. */
+.enclave-system-content[data-office="hr"] .header {
+  justify-content: flex-start !important;
+}
+
+.enclave-system-content[data-office="hr"] .header .actions {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}

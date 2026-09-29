@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="512"
+   height="512"
+   viewBox="0 0 512 512"
+   role="img"
+   aria-label="Enclave logo"
+   version="1.1"
+   id="svg16"
+   sodipodi:docname="Enclave-icon-mono-white.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview16"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1" />
+  <defs
+     id="defs11">
+    <linearGradient
+       id="outerTop"
+       x1="96"
+       y1="90"
+       x2="420"
+       y2="210"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#0F4C5C"
+         id="stop1" />
+      <stop
+         offset="0.52"
+         stop-color="#18D5B7"
+         id="stop2" />
+      <stop
+         offset="1"
+         stop-color="#00A88E"
+         id="stop3" />
+    </linearGradient>
+    <linearGradient
+       id="outerBottom"
+       x1="95"
+       y1="380"
+       x2="420"
+       y2="260"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#0B1D2D"
+         id="stop4" />
+      <stop
+         offset="0.55"
+         stop-color="#0F4C5C"
+         id="stop5" />
+      <stop
+         offset="1"
+         stop-color="#00A88E"
+         id="stop6" />
+    </linearGradient>
+    <linearGradient
+       id="innerStroke"
+       x1="162"
+       y1="160"
+       x2="350"
+       y2="345"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#D9E7E6"
+         id="stop7" />
+      <stop
+         offset="0.55"
+         stop-color="#71C8C1"
+         id="stop8" />
+      <stop
+         offset="1"
+         stop-color="#0F4C5C"
+         id="stop9" />
+    </linearGradient>
+    <linearGradient
+       id="coreFill"
+       x1="170"
+       y1="165"
+       x2="345"
+       y2="340"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0"
+         stop-color="#142B3D"
+         id="stop10" />
+      <stop
+         offset="1"
+         stop-color="#06131E"
+         id="stop11" />
+    </linearGradient>
+    <style
+       id="style11">
+        .wordmark { font-family: 'Noto Sans Display', 'Inter Display', 'Inter', 'Arial', sans-serif; font-weight: 600; letter-spacing: 0.04em; }
+        .tagline { font-family: 'Inter Display', 'Inter', 'Arial', sans-serif; font-weight: 500; letter-spacing: 0.32em; }
+        .small { font-family: 'Inter Display', 'Inter', 'Arial', sans-serif; font-weight: 600; letter-spacing: 0.12em; }
+      </style>
+  </defs>
+  <g
+     transform="matrix(1.12 0 0 1.12 -30.72 -30.72)"
+     id="g16">
+    <path
+       d="M84 151 L256 52 L428 151 L428 216 L373 216 L373 183 L256 115 L139 183 Z"
+       fill="#F7FAFC"
+       id="path11" />
+    <path
+       d="M428 292 L428 351 L256 450 L84 351 L84 151 L139 183 L139 318 L256 385 L373 318 L373 292 Z"
+       fill="#F7FAFC"
+       id="path12" />
+    <polygon
+       points="256,146 346,198 346,302 256,354 166,302 166,198"
+       fill="none"
+       stroke="#F7FAFC"
+       stroke-width="14"
+       stroke-linejoin="miter"
+       id="polygon12" />
+    <path
+       d="M256 190 L256 320"
+       stroke="#F7FAFC"
+       stroke-width="6"
+       stroke-linecap="round"
+       id="path13" />
+    <circle
+       cx="256"
+       cy="255"
+       r="9"
+       fill="#F7FAFC"
+       id="circle13" />
+    <path
+       d="M225 213 L225 228 M225 250 L225 265 M225 287 L225 302"
+       stroke="#F7FAFC"
+       stroke-width="4"
+       stroke-linecap="round"
+       opacity="0.8"
+       id="path14" />
+    <path
+       d="M287 213 L287 228 M287 250 L287 265 M287 287 L287 302"
+       stroke="#F7FAFC"
+       stroke-width="4"
+       stroke-linecap="round"
+       opacity="0.8"
+       id="path15" />
+    <path
+       d="M318 225 L318 240 M318 274 L318 289"
+       stroke="#F7FAFC"
+       stroke-width="4"
+       stroke-linecap="round"
+       opacity="0.55"
+       id="path16" />
+  </g>
+</svg>

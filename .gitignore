@@ -1,0 +1,73 @@
+# ============================================================
+# Enclave AI - repository exclusions
+# ============================================================
+
+# Secrets / environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Active production proxy config contains authentication material
+/Caddyfile
+!/Caddyfile.example
+
+# Runtime / recovery / backups
+/backups/
+/logs/
+/uploads/
+/data/
+/storage/
+/tmp/
+/recovery/
+/backend/uploads/
+/backend/storage/
+
+# Operational scripts are root-owned/unreadable by the application user.
+# Excluded from v1.0.0 pending a separate permission/source review.
+/scripts/
+
+# Database / archive artifacts
+*.dump
+*.dump.gz
+*.tgz
+*.tar.gz
+
+# Historical source snapshots and one-off copies
+*.before-*
+*.pre-*
+*.bak
+*.backup
+*~
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js generated files
+node_modules/
+.next/
+out/
+dist/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# One-off root marker observed during release audit
+/20260928-161651
