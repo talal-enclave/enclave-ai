@@ -31,3 +31,16 @@ Tag: `v1.0.0`
 - Added daily checksum/freshness verification at 03:05 Riyadh time.
 - Caddy's product `Server` header remains informational and is not treated as a security boundary.
 - No application business logic or database schema changes.
+
+## v1.0.2 no-sudo operations hardening
+
+- Added a daily production security/operations self-check.
+- Validates Git cleanliness, storage thresholds, public ports, Docker exposure,
+  secret-file permissions, API/Web health, agent foundation, HTTPS security
+  headers, TLS certificate expiry, backup freshness/checksums, and required
+  cron jobs.
+- Scheduled daily at 03:15 Asia/Riyadh, after the 02:30 backup and 03:05
+  backup-integrity verification.
+- Root-level SSH/UFW/Fail2ban/package changes remain intentionally deferred
+  until administrative sudo access is available.
+- No application business logic or database schema changes.
