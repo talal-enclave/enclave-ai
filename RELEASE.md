@@ -44,3 +44,12 @@ Tag: `v1.0.0`
 - Root-level SSH/UFW/Fail2ban/package changes remain intentionally deferred
   until administrative sudo access is available.
 - No application business logic or database schema changes.
+
+## v1.0.3 compliance expiry priority alerts
+
+- Standardized government/corporate and employee government-document renewal lead time to 90 days.
+- Added daily compliance-expiry synchronization at 06:15 Asia/Riyadh.
+- Compliance documents with expiry dates are represented in HR Calendar with a 90-day alert window.
+- Priority becomes HIGH inside 90 days and CRITICAL inside 30 days or after expiry.
+- Existing compliance records are reconciled to the 90-day rule.
+- No automatic renewal, filing, payment, or external communication is performed.

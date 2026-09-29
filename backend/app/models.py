@@ -3899,7 +3899,7 @@ class HRCorporateComplianceRecord(Base):
     )
 
     renewal_lead_days: Mapped[int] = mapped_column(
-        default=60,
+        default=90,
         nullable=False,
     )
 
@@ -4006,7 +4006,7 @@ class HREmployeeGovernmentDocument(Base):
     )
 
     renewal_lead_days: Mapped[int] = mapped_column(
-        default=60,
+        default=90,
         nullable=False,
     )
 

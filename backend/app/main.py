@@ -15413,7 +15413,7 @@ class HRCorporateComplianceCreateRequest(BaseModel):
     issue_date: date | None = None
     expiry_date: date | None = None
     responsible_owner: str | None = None
-    renewal_lead_days: int = 60
+    renewal_lead_days: int = 90
     escalation_lead_days: int = 30
     renewal_cost: float = 0
     currency: str = "SAR"
@@ -15448,7 +15448,7 @@ class HREmployeeGovernmentDocumentCreateRequest(BaseModel):
     issue_date: date | None = None
     expiry_date: date | None = None
     responsible_owner: str | None = None
-    renewal_lead_days: int = 60
+    renewal_lead_days: int = 90
     escalation_lead_days: int = 30
     renewal_cost: float = 0
     currency: str = "SAR"
