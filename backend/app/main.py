@@ -1901,6 +1901,32 @@ async def chat_with_agent(
         }
     )
 
+    # CEO ORCHESTRATION HOOK v1.1.0
+    ceo_orchestration = None
+
+    if agent.slug == "ceo":
+        try:
+            ceo_orchestration = await _ceo_orchestrate_request(
+                db,
+                request.message,
+                conversation.id,
+            )
+
+            if ceo_orchestration and ceo_orchestration.get("delegated"):
+                effective_instructions = (
+                    effective_instructions
+                    + "\n\nINTERNAL CEO ORCHESTRATION RESULTS:\n"
+                    + json.dumps(
+                        ceo_orchestration,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    + "\nUse these results in one consolidated answer. "
+                      "Do not claim external execution unless proven."
+                )
+        except Exception:
+            ceo_orchestration = None
+
     # Save user message
     user_message = Message(
         conversation_id=conversation.id,
@@ -2024,12 +2050,22 @@ async def chat_with_agent(
     try:
         # If this is a sensitive/external action requiring
         # approval, it must NOT also become a normal task.
-        approval_gate_for_task = (
-            await extract_approval_candidate(
-                request.message,
-                agent.slug,
+        # CEO ORCHESTRATION AUTO-TASK GUARD v1.1.0
+        if (
+            agent.slug == "ceo"
+            and ceo_orchestration
+            and ceo_orchestration.get("delegated")
+        ):
+            approval_gate_for_task = {
+                "orchestrated_work_order": True,
+            }
+        else:
+            approval_gate_for_task = (
+                await extract_approval_candidate(
+                    request.message,
+                    agent.slug,
+                )
             )
-        )
 
         if approval_gate_for_task:
             task_candidate = None
@@ -3003,6 +3039,49 @@ async def approve_approval(
             approved=True,
             decision_reason=approval.decision_reason,
         )
+
+    # COMMERCIAL INVOICE APPROVAL EXECUTION v1.1.0
+    if approval.action_type == "commercial_invoice_issue":
+        invoice_id = (approval.action_payload or {}).get(
+            "commercial_invoice_id"
+        )
+        if not invoice_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Commercial invoice approval is missing invoice id",
+            )
+        invoice_row = (
+            await db.execute(
+                text(
+                    "SELECT id,billing_schedule_id,status "
+                    "FROM commercial_invoices WHERE id=:id"
+                ),
+                {"id": uuid.UUID(str(invoice_id))},
+            )
+        ).mappings().first()
+        if invoice_row is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Commercial invoice not found",
+            )
+        issued_at = datetime.now(timezone.utc)
+        await db.execute(
+            text(
+                "UPDATE commercial_invoices "
+                "SET status='issued',issued_at=:issued_at,updated_at=now() "
+                "WHERE id=:id"
+            ),
+            {"id": invoice_row["id"], "issued_at": issued_at},
+        )
+        await db.execute(
+            text(
+                "UPDATE commercial_billing_schedule "
+                "SET status='issued',updated_at=now() "
+                "WHERE id=:id"
+            ),
+            {"id": invoice_row["billing_schedule_id"]},
+        )
+        approval.executed_at = issued_at
 
     await write_audit_log(
         db,
@@ -75547,3 +75626,2080 @@ async def update_preoperational_readiness(
         row,
         evidence_rows,
     )
+
+# ============================================================
+# ENCLAVE v1.1.0 - SALES + COMMERCIAL FINANCE + CEO COMMAND CENTER
+# ============================================================
+
+from datetime import datetime as _cf_datetime
+from datetime import date as _cf_date
+from datetime import time as _cf_time
+from datetime import timedelta as _cf_timedelta
+from datetime import timezone as _cf_timezone
+from zoneinfo import ZoneInfo as _CFZoneInfo
+
+_CF_RIYADH = _CFZoneInfo("Asia/Riyadh")
+_CF_ALLOWED_AGENTS = {
+    "sales", "finance", "hr", "procurement", "marketing",
+    "admin", "legal", "it", "audit",
+}
+_CF_PRIORITIES = {"low", "normal", "high", "critical"}
+
+
+async def _cf_scalar(db, sql, params=None):
+    result = await db.execute(text(sql), params or {})
+    return result.scalar()
+
+
+def _cf_json(raw):
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`").strip()
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+    first = raw.find("{")
+    last = raw.rfind("}")
+    if first >= 0 and last >= first:
+        raw = raw[first:last + 1]
+    return json.loads(raw)
+
+
+def _cf_today():
+    return _cf_datetime.now(_CF_RIYADH).date()
+
+
+def _cf_day_bounds(day_value=None):
+    day_value = day_value or _cf_today()
+    start = _cf_datetime.combine(
+        day_value,
+        _cf_time.min,
+        tzinfo=_CF_RIYADH,
+    )
+    end = start + _cf_timedelta(days=1)
+    return (
+        day_value,
+        start.astimezone(_cf_timezone.utc),
+        end.astimezone(_cf_timezone.utc),
+    )
+
+
+# ------------------------------------------------------------
+# Financial proposals - thin wrapper over authoritative Sales
+# quotation workflow.
+# ------------------------------------------------------------
+
+class CommercialProposalLineRequest(BaseModel):
+    description: str
+    quantity: float = 1
+    unit_price: float
+    direct_cost: float = 0
+    notes: str | None = None
+
+
+class CommercialProposalCreateRequest(BaseModel):
+    opportunity_id: uuid.UUID
+    discount_amount: float = 0
+    validity_date: _cf_date | None = None
+    payment_terms: str | None = None
+    scope_summary: str | None = None
+    notes: str | None = None
+    lines: list[CommercialProposalLineRequest]
+
+
+@app.post("/api/commercial-finance/proposals")
+async def create_commercial_finance_proposal(
+    payload: CommercialProposalCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if not payload.lines:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one proposal line is required",
+        )
+
+    candidate = {
+        "opportunity_id": payload.opportunity_id,
+        "discount_amount": payload.discount_amount,
+        "vat_rate_pct": 0,
+        "validity_date": payload.validity_date,
+        "payment_terms": payload.payment_terms,
+        "scope_summary": payload.scope_summary,
+        "notes": payload.notes,
+        "lines": [
+            {
+                "description": line.description,
+                "quantity": line.quantity,
+                "unit_price": line.unit_price,
+                "direct_cost": line.direct_cost,
+                "notes": line.notes,
+            }
+            for line in payload.lines
+        ],
+    }
+
+    fields = SalesQuotationCreateRequest.model_fields
+    filtered = {
+        key: value
+        for key, value in candidate.items()
+        if key in fields
+    }
+
+    missing = [
+        name
+        for name, field in fields.items()
+        if field.is_required()
+        and name not in filtered
+    ]
+
+    if missing:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Sales quotation contract requires unsupported fields: "
+                + ", ".join(missing)
+            ),
+        )
+
+    request_model = SalesQuotationCreateRequest(**filtered)
+
+    return await create_sales_quotation(
+        request_model,
+        db,
+    )
+
+
+# ------------------------------------------------------------
+# Billing schedule
+# ------------------------------------------------------------
+
+class CommercialBillingScheduleCreateRequest(BaseModel):
+    opportunity_id: uuid.UUID
+    quotation_id: uuid.UUID
+    label: str
+    issue_date: _cf_date
+    due_date: _cf_date
+    amount_ex_vat: float
+    notes: str | None = None
+
+
+@app.post("/api/commercial-finance/billing-schedule")
+async def create_commercial_billing_schedule(
+    payload: CommercialBillingScheduleCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.due_date < payload.issue_date:
+        raise HTTPException(
+            status_code=400,
+            detail="Due date cannot be before invoice issue date",
+        )
+
+    if payload.amount_ex_vat <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Billing amount must be greater than zero",
+        )
+
+    label = payload.label.strip()
+    if not label:
+        raise HTTPException(
+            status_code=400,
+            detail="Billing label is required",
+        )
+
+    quote = (
+        await db.execute(
+            text(
+                """
+                SELECT id, opportunity_id, status, net_revenue_ex_vat
+                FROM sales_quotations
+                WHERE id=:quotation_id
+                """
+            ),
+            {"quotation_id": payload.quotation_id},
+        )
+    ).mappings().first()
+
+    if quote is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Quotation not found",
+        )
+
+    if str(quote["opportunity_id"]) != str(payload.opportunity_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Quotation does not belong to this opportunity",
+        )
+
+    if quote["status"] not in {
+        "active", "approved", "accepted", "won"
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Billing schedule requires an approved/active "
+                "commercial quotation"
+            ),
+        )
+
+    already = float(
+        await _cf_scalar(
+            db,
+            """
+            SELECT COALESCE(sum(amount_ex_vat),0)
+            FROM commercial_billing_schedule
+            WHERE quotation_id=:quotation_id
+              AND status <> 'cancelled'
+            """,
+            {"quotation_id": payload.quotation_id},
+        )
+        or 0
+    )
+
+    quote_total = float(quote["net_revenue_ex_vat"] or 0)
+
+    if round(already + payload.amount_ex_vat, 2) > round(quote_total, 2):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Billing schedule total cannot exceed approved "
+                "quotation net revenue"
+            ),
+        )
+
+    schedule_id = uuid.uuid4()
+
+    await db.execute(
+        text(
+            """
+            INSERT INTO commercial_billing_schedule (
+              id, opportunity_id, quotation_id, label,
+              issue_date, due_date, amount_ex_vat,
+              status, notes, created_at, updated_at
+            )
+            VALUES (
+              :id, :opportunity_id, :quotation_id, :label,
+              :issue_date, :due_date, :amount_ex_vat,
+              'scheduled', :notes, now(), now()
+            )
+            """
+        ),
+        {
+            "id": schedule_id,
+            "opportunity_id": payload.opportunity_id,
+            "quotation_id": payload.quotation_id,
+            "label": label,
+            "issue_date": payload.issue_date,
+            "due_date": payload.due_date,
+            "amount_ex_vat": payload.amount_ex_vat,
+            "notes": (
+                payload.notes.strip()
+                if payload.notes
+                else None
+            ),
+        },
+    )
+
+    await write_audit_log(
+        db,
+        actor="user",
+        action="commercial_finance.billing_schedule.created",
+        details={
+            "billing_schedule_id": str(schedule_id),
+            "opportunity_id": str(payload.opportunity_id),
+            "quotation_id": str(payload.quotation_id),
+            "issue_date": payload.issue_date.isoformat(),
+            "due_date": payload.due_date.isoformat(),
+            "amount_ex_vat": payload.amount_ex_vat,
+        },
+    )
+
+    await db.commit()
+
+    return {
+        "id": str(schedule_id),
+        "status": "scheduled",
+        "issue_date": payload.issue_date,
+        "due_date": payload.due_date,
+        "amount_ex_vat": payload.amount_ex_vat,
+    }
+
+
+async def _cf_finance_customer_link(db, sales_account_id):
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT to_jsonb(x) AS data
+                FROM sales_finance_customer_links x
+                """
+            )
+        )
+    ).mappings().all()
+
+    for row in rows:
+        data = row["data"] or {}
+
+        sales_value = (
+            data.get("sales_account_id")
+            or data.get("account_id")
+        )
+        customer_value = (
+            data.get("finance_customer_id")
+            or data.get("customer_id")
+        )
+
+        if (
+            sales_value is not None
+            and str(sales_value) == str(sales_account_id)
+            and customer_value is not None
+        ):
+            return uuid.UUID(str(customer_value))
+
+    return None
+
+
+# ------------------------------------------------------------
+# Automatic DRAFT commercial invoice preparation.
+# Does NOT send externally and does NOT post accounting.
+# ------------------------------------------------------------
+
+async def _cf_prepare_due_invoices(db: AsyncSession):
+    today = _cf_today()
+
+    schedules = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  b.id,
+                  b.opportunity_id,
+                  b.quotation_id,
+                  b.label,
+                  b.issue_date,
+                  b.due_date,
+                  b.amount_ex_vat,
+                  o.account_id,
+                  o.name AS opportunity_name,
+                  q.vat_rate_pct,
+                  a.name AS company_name
+                FROM commercial_billing_schedule b
+                JOIN sales_opportunities o
+                  ON o.id=b.opportunity_id
+                JOIN sales_accounts a
+                  ON a.id=o.account_id
+                JOIN sales_quotations q
+                  ON q.id=b.quotation_id
+                WHERE b.invoice_id IS NULL
+                  AND b.status IN (
+                    'scheduled',
+                    'blocked_customer_link'
+                  )
+                  AND b.issue_date <= :today
+                ORDER BY b.issue_date, b.created_at
+                """
+            ),
+            {"today": today},
+        )
+    ).mappings().all()
+
+    finance_agent = (
+        await db.execute(
+            select(Agent).where(
+                Agent.slug == "finance"
+            )
+        )
+    ).scalars().first()
+
+    vat_status = (
+        await _cf_scalar(
+            db,
+            """
+            SELECT vat_status
+            FROM company_profiles
+            WHERE profile_key='primary'
+            LIMIT 1
+            """
+        )
+        or "not_registered"
+    )
+
+    vat_registered = str(vat_status).lower() in {
+        "registered",
+        "active",
+    }
+
+    created = []
+    blocked = []
+
+    for item in schedules:
+        customer_id = await _cf_finance_customer_link(
+            db,
+            item["account_id"],
+        )
+
+        if customer_id is None:
+            await db.execute(
+                text(
+                    """
+                    UPDATE commercial_billing_schedule
+                    SET status='blocked_customer_link',
+                        updated_at=now()
+                    WHERE id=:id
+                    """
+                ),
+                {"id": item["id"]},
+            )
+
+            blocked.append({
+                "billing_schedule_id": str(item["id"]),
+                "company_name": item["company_name"],
+                "reason": "finance_customer_link_required",
+            })
+            continue
+
+        customer = (
+            await db.execute(
+                text(
+                    """
+                    SELECT
+                      id, name_ar, name_en,
+                      vat_number, cr_number
+                    FROM finance_customers
+                    WHERE id=:id
+                      AND is_active IS TRUE
+                    """
+                ),
+                {"id": customer_id},
+            )
+        ).mappings().first()
+
+        if customer is None:
+            blocked.append({
+                "billing_schedule_id": str(item["id"]),
+                "company_name": item["company_name"],
+                "reason": "linked_finance_customer_missing",
+            })
+            continue
+
+        rate = (
+            float(item["vat_rate_pct"] or 0)
+            if vat_registered
+            else 0.0
+        )
+
+        subtotal = round(
+            float(item["amount_ex_vat"] or 0),
+            2,
+        )
+        vat_amount = round(
+            subtotal * rate / 100.0,
+            2,
+        )
+        total = round(
+            subtotal + vat_amount,
+            2,
+        )
+
+        invoice_id = uuid.uuid4()
+        approval_id = uuid.uuid4()
+
+        invoice_number = (
+            f"INV-{item['issue_date'].strftime('%Y%m%d')}-"
+            f"{str(invoice_id)[:8].upper()}"
+        )
+
+        approval = Approval(
+            id=approval_id,
+            agent_id=(
+                finance_agent.id
+                if finance_agent
+                else None
+            ),
+            source_conversation_id=None,
+            title=f"Issue Commercial Invoice {invoice_number}",
+            description=(
+                f"Approve issuance of {invoice_number} for "
+                f"{item['company_name']} / {item['label']}. "
+                "Approval issues the invoice inside Enclave only. "
+                "It does not email the customer and does not post "
+                "accounting entries."
+            ),
+            action_type="commercial_invoice_issue",
+            risk_level="medium",
+            status="pending",
+            action_payload={
+                "commercial_invoice_id": str(invoice_id),
+                "billing_schedule_id": str(item["id"]),
+                "invoice_number": invoice_number,
+                "customer_id": str(customer_id),
+                "subtotal": subtotal,
+                "vat_amount": vat_amount,
+                "total_amount": total,
+                "external_send": False,
+                "accounting_posting": False,
+            },
+        )
+        db.add(approval)
+
+        await db.execute(
+            text(
+                """
+                INSERT INTO commercial_invoices (
+                  id,
+                  billing_schedule_id,
+                  opportunity_id,
+                  quotation_id,
+                  customer_id,
+                  invoice_number,
+                  issue_date,
+                  due_date,
+                  currency,
+                  subtotal,
+                  vat_rate_pct,
+                  vat_amount,
+                  total_amount,
+                  collected_amount,
+                  status,
+                  approval_id,
+                  customer_name,
+                  customer_cr_number,
+                  customer_vat_number,
+                  description,
+                  created_at,
+                  updated_at
+                )
+                VALUES (
+                  :id,
+                  :billing_schedule_id,
+                  :opportunity_id,
+                  :quotation_id,
+                  :customer_id,
+                  :invoice_number,
+                  :issue_date,
+                  :due_date,
+                  'SAR',
+                  :subtotal,
+                  :vat_rate_pct,
+                  :vat_amount,
+                  :total_amount,
+                  0,
+                  'ready_for_approval',
+                  :approval_id,
+                  :customer_name,
+                  :customer_cr_number,
+                  :customer_vat_number,
+                  :description,
+                  now(),
+                  now()
+                )
+                """
+            ),
+            {
+                "id": invoice_id,
+                "billing_schedule_id": item["id"],
+                "opportunity_id": item["opportunity_id"],
+                "quotation_id": item["quotation_id"],
+                "customer_id": customer_id,
+                "invoice_number": invoice_number,
+                "issue_date": item["issue_date"],
+                "due_date": item["due_date"],
+                "subtotal": subtotal,
+                "vat_rate_pct": rate,
+                "vat_amount": vat_amount,
+                "total_amount": total,
+                "approval_id": approval_id,
+                "customer_name": (
+                    customer["name_ar"]
+                    or customer["name_en"]
+                    or item["company_name"]
+                ),
+                "customer_cr_number": customer["cr_number"],
+                "customer_vat_number": customer["vat_number"],
+                "description": item["label"],
+            },
+        )
+
+        await db.execute(
+            text(
+                """
+                UPDATE commercial_billing_schedule
+                SET invoice_id=:invoice_id,
+                    status='invoice_ready',
+                    updated_at=now()
+                WHERE id=:id
+                """
+            ),
+            {
+                "invoice_id": invoice_id,
+                "id": item["id"],
+            },
+        )
+
+        await write_audit_log(
+            db,
+            actor="agent:finance",
+            action="commercial_finance.invoice_prepared",
+            details={
+                "commercial_invoice_id": str(invoice_id),
+                "billing_schedule_id": str(item["id"]),
+                "invoice_number": invoice_number,
+                "issue_date": item["issue_date"].isoformat(),
+                "due_date": item["due_date"].isoformat(),
+                "subtotal": subtotal,
+                "vat_amount": vat_amount,
+                "total_amount": total,
+                "approval_id": str(approval_id),
+                "external_send": False,
+                "accounting_posting": False,
+            },
+        )
+
+        created.append({
+            "id": str(invoice_id),
+            "invoice_number": invoice_number,
+            "approval_id": str(approval_id),
+            "status": "ready_for_approval",
+        })
+
+    return {
+        "date": today.isoformat(),
+        "created": created,
+        "blocked": blocked,
+        "safety": {
+            "external_send": False,
+            "accounting_posting": False,
+            "bank_transfer": False,
+        },
+    }
+
+
+@app.post("/api/commercial-finance/invoice-sync")
+async def commercial_finance_invoice_sync(
+    db: AsyncSession = Depends(get_db),
+):
+    result = await _cf_prepare_due_invoices(db)
+    await db.commit()
+    return result
+
+
+@app.post("/api/commercial-finance/invoices/{invoice_id}/issue")
+async def issue_commercial_invoice(
+    invoice_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  id, approval_id, status,
+                  billing_schedule_id
+                FROM commercial_invoices
+                WHERE id=:id
+                """
+            ),
+            {"id": invoice_id},
+        )
+    ).mappings().first()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Commercial invoice not found",
+        )
+
+    if row["status"] == "issued":
+        return {
+            "id": str(invoice_id),
+            "status": "issued",
+        }
+
+    approval = (
+        await db.execute(
+            select(Approval).where(
+                Approval.id == row["approval_id"]
+            )
+        )
+    ).scalars().first()
+
+    if approval is None or approval.status != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Approved invoice issuance authorization is required"
+            ),
+        )
+
+    now_utc = _cf_datetime.now(_cf_timezone.utc)
+
+    await db.execute(
+        text(
+            """
+            UPDATE commercial_invoices
+            SET status='issued',
+                issued_at=:issued_at,
+                updated_at=now()
+            WHERE id=:id
+            """
+        ),
+        {
+            "id": invoice_id,
+            "issued_at": now_utc,
+        },
+    )
+
+    await db.execute(
+        text(
+            """
+            UPDATE commercial_billing_schedule
+            SET status='issued',
+                updated_at=now()
+            WHERE id=:id
+            """
+        ),
+        {"id": row["billing_schedule_id"]},
+    )
+
+    approval.executed_at = now_utc
+
+    await write_audit_log(
+        db,
+        actor="user",
+        action="commercial_finance.invoice_issued",
+        details={
+            "commercial_invoice_id": str(invoice_id),
+            "external_send": False,
+            "accounting_posting": False,
+        },
+    )
+
+    await db.commit()
+
+    return {
+        "id": str(invoice_id),
+        "status": "issued",
+        "external_send": False,
+        "accounting_posting": False,
+    }
+
+
+class CommercialCollectionRecordRequest(BaseModel):
+    amount: float
+    evidence_reference: str
+
+
+@app.post(
+    "/api/commercial-finance/invoices/{invoice_id}/record-collection"
+)
+async def record_commercial_collection(
+    invoice_id: uuid.UUID,
+    payload: CommercialCollectionRecordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.amount <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Collection amount must be greater than zero",
+        )
+
+    evidence = payload.evidence_reference.strip()
+
+    if not evidence:
+        raise HTTPException(
+            status_code=400,
+            detail="Collection evidence reference is required",
+        )
+
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  total_amount,
+                  collected_amount,
+                  status
+                FROM commercial_invoices
+                WHERE id=:id
+                """
+            ),
+            {"id": invoice_id},
+        )
+    ).mappings().first()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Commercial invoice not found",
+        )
+
+    if row["status"] not in {
+        "issued",
+        "partially_collected",
+        "collected",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Invoice must be issued before collection "
+                "can be recorded"
+            ),
+        )
+
+    new_total = round(
+        float(row["collected_amount"] or 0)
+        + payload.amount,
+        2,
+    )
+    total_amount = round(
+        float(row["total_amount"] or 0),
+        2,
+    )
+
+    if new_total > total_amount:
+        raise HTTPException(
+            status_code=409,
+            detail="Collection cannot exceed invoice total",
+        )
+
+    new_status = (
+        "collected"
+        if new_total >= total_amount
+        else "partially_collected"
+    )
+
+    await db.execute(
+        text(
+            """
+            UPDATE commercial_invoices
+            SET collected_amount=:collected_amount,
+                status=:status,
+                collection_evidence_reference=:evidence,
+                updated_at=now()
+            WHERE id=:id
+            """
+        ),
+        {
+            "id": invoice_id,
+            "collected_amount": new_total,
+            "status": new_status,
+            "evidence": evidence,
+        },
+    )
+
+    await write_audit_log(
+        db,
+        actor="user",
+        action="commercial_finance.collection_recorded",
+        details={
+            "commercial_invoice_id": str(invoice_id),
+            "amount": payload.amount,
+            "collected_total": new_total,
+            "evidence_reference": evidence,
+        },
+    )
+
+    await db.commit()
+
+    return {
+        "id": str(invoice_id),
+        "status": new_status,
+        "collected_amount": new_total,
+        "outstanding_amount": round(
+            total_amount - new_total,
+            2,
+        ),
+    }
+
+
+@app.get("/api/commercial-finance/dashboard")
+async def commercial_finance_dashboard(
+    db: AsyncSession = Depends(get_db),
+):
+    today = _cf_today()
+
+    quotations = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  q.id,
+                  q.opportunity_id,
+                  q.version,
+                  q.external_quote_number,
+                  q.status,
+                  q.net_revenue_ex_vat,
+                  q.vat_amount,
+                  q.total_inc_vat,
+                  q.validity_date,
+                  q.payment_terms,
+                  q.scope_summary,
+                  q.created_at,
+                  o.name AS opportunity_name,
+                  a.name AS company_name
+                FROM sales_quotations q
+                JOIN sales_opportunities o
+                  ON o.id=q.opportunity_id
+                JOIN sales_accounts a
+                  ON a.id=o.account_id
+                ORDER BY q.created_at DESC
+                LIMIT 200
+                """
+            )
+        )
+    ).mappings().all()
+
+    schedules = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  b.id,
+                  b.opportunity_id,
+                  b.quotation_id,
+                  b.label,
+                  b.issue_date,
+                  b.due_date,
+                  b.amount_ex_vat,
+                  b.status,
+                  b.invoice_id,
+                  b.notes,
+                  a.name AS company_name,
+                  o.name AS opportunity_name
+                FROM commercial_billing_schedule b
+                JOIN sales_opportunities o
+                  ON o.id=b.opportunity_id
+                JOIN sales_accounts a
+                  ON a.id=o.account_id
+                ORDER BY b.issue_date, b.created_at
+                """
+            )
+        )
+    ).mappings().all()
+
+    invoices = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  ci.*,
+                  ap.status AS approval_status,
+                  ap.decided_at AS approval_decided_at
+                FROM commercial_invoices ci
+                LEFT JOIN approvals ap
+                  ON ap.id=ci.approval_id
+                ORDER BY ci.issue_date DESC, ci.created_at DESC
+                """
+            )
+        )
+    ).mappings().all()
+
+    alerts = []
+
+    for item in schedules:
+        issue_delta = (
+            item["issue_date"] - today
+        ).days
+
+        if item["invoice_id"] is None:
+            if issue_delta < 0:
+                alert_type = "overdue_not_invoiced"
+                severity = "critical"
+            elif issue_delta == 0:
+                alert_type = "invoice_due_today"
+                severity = "high"
+            elif issue_delta <= 7:
+                alert_type = "invoice_due_soon"
+                severity = "high"
+            else:
+                continue
+
+            alerts.append({
+                "type": alert_type,
+                "severity": severity,
+                "billing_schedule_id": str(item["id"]),
+                "company_name": item["company_name"],
+                "label": item["label"],
+                "issue_date": item["issue_date"].isoformat(),
+                "due_date": item["due_date"].isoformat(),
+                "amount_ex_vat": float(item["amount_ex_vat"]),
+            })
+
+    for item in quotations:
+        if item["validity_date"] is None:
+            continue
+
+        days = (
+            item["validity_date"] - today
+        ).days
+
+        if (
+            days < 0
+            and item["status"] in {
+                "draft",
+                "pending_approval",
+                "active",
+            }
+        ):
+            alerts.append({
+                "type": "quotation_expired",
+                "severity": "high",
+                "quotation_id": str(item["id"]),
+                "company_name": item["company_name"],
+                "validity_date":
+                    item["validity_date"].isoformat(),
+            })
+        elif 0 <= days <= 7:
+            alerts.append({
+                "type": "quotation_expiring",
+                "severity": "normal",
+                "quotation_id": str(item["id"]),
+                "company_name": item["company_name"],
+                "validity_date":
+                    item["validity_date"].isoformat(),
+            })
+
+    for item in invoices:
+        if item["status"] in {
+            "issued",
+            "partially_collected",
+        }:
+            days = (
+                item["due_date"] - today
+            ).days
+
+            outstanding = round(
+                float(item["total_amount"] or 0)
+                - float(item["collected_amount"] or 0),
+                2,
+            )
+
+            if outstanding > 0 and days < 0:
+                alerts.append({
+                    "type": "collection_overdue",
+                    "severity": "critical",
+                    "invoice_id": str(item["id"]),
+                    "invoice_number": item["invoice_number"],
+                    "customer_name": item["customer_name"],
+                    "outstanding_amount": outstanding,
+                    "due_date": item["due_date"].isoformat(),
+                })
+            elif outstanding > 0 and 0 <= days <= 7:
+                alerts.append({
+                    "type": "collection_due_soon",
+                    "severity": "high",
+                    "invoice_id": str(item["id"]),
+                    "invoice_number": item["invoice_number"],
+                    "customer_name": item["customer_name"],
+                    "outstanding_amount": outstanding,
+                    "due_date": item["due_date"].isoformat(),
+                })
+
+    def normalize_row(row, money_fields=()):
+        output = {}
+        for key, value in dict(row).items():
+            if isinstance(value, uuid.UUID):
+                output[key] = str(value)
+            elif hasattr(value, "isoformat"):
+                output[key] = value.isoformat()
+            elif key in money_fields and value is not None:
+                output[key] = float(value)
+            else:
+                output[key] = value
+        return output
+
+    return {
+        "generated_at": _cf_datetime.now(
+            _CF_RIYADH
+        ).isoformat(),
+        "quotations": [
+            normalize_row(
+                item,
+                {
+                    "net_revenue_ex_vat",
+                    "vat_amount",
+                    "total_inc_vat",
+                },
+            )
+            for item in quotations
+        ],
+        "billing_schedule": [
+            normalize_row(
+                item,
+                {"amount_ex_vat"},
+            )
+            for item in schedules
+        ],
+        "invoices": [
+            normalize_row(
+                item,
+                {
+                    "subtotal",
+                    "vat_rate_pct",
+                    "vat_amount",
+                    "total_amount",
+                    "collected_amount",
+                },
+            )
+            for item in invoices
+        ],
+        "alerts": alerts,
+        "summary": {
+            "quotations": len(quotations),
+            "billing_schedule_items": len(schedules),
+            "ready_for_approval": sum(
+                1
+                for x in invoices
+                if x["status"] == "ready_for_approval"
+            ),
+            "issued": sum(
+                1
+                for x in invoices
+                if x["status"] == "issued"
+            ),
+            "partially_collected": sum(
+                1
+                for x in invoices
+                if x["status"] == "partially_collected"
+            ),
+            "collected": sum(
+                1
+                for x in invoices
+                if x["status"] == "collected"
+            ),
+            "alerts": len(alerts),
+        },
+        "safety": {
+            "automatic_draft_invoice_preparation": True,
+            "invoice_issue_requires_approval": True,
+            "automatic_external_send": False,
+            "automatic_accounting_posting": False,
+            "automatic_bank_transfer": False,
+            "automatic_finance_customer_creation": False,
+        },
+    }
+
+
+@app.get(
+    "/api/commercial-finance/invoices/{invoice_id}"
+)
+async def get_commercial_invoice(
+    invoice_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  ci.*,
+                  q.external_quote_number,
+                  q.payment_terms,
+                  o.name AS opportunity_name,
+                  a.name AS sales_company_name,
+                  cp.legal_name_en AS seller_name_en,
+                  cp.legal_name_ar AS seller_name_ar,
+                  cp.commercial_registration_no AS seller_cr,
+                  cp.vat_number AS seller_vat
+                FROM commercial_invoices ci
+                JOIN sales_quotations q
+                  ON q.id=ci.quotation_id
+                JOIN sales_opportunities o
+                  ON o.id=ci.opportunity_id
+                JOIN sales_accounts a
+                  ON a.id=o.account_id
+                CROSS JOIN LATERAL (
+                  SELECT *
+                  FROM company_profiles
+                  WHERE profile_key='primary'
+                  LIMIT 1
+                ) cp
+                WHERE ci.id=:id
+                """
+            ),
+            {"id": invoice_id},
+        )
+    ).mappings().first()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Commercial invoice not found",
+        )
+
+    output = {}
+
+    for key, value in dict(row).items():
+        if isinstance(value, uuid.UUID):
+            output[key] = str(value)
+        elif hasattr(value, "isoformat"):
+            output[key] = value.isoformat()
+        elif (
+            key
+            in {
+                "subtotal",
+                "vat_rate_pct",
+                "vat_amount",
+                "total_amount",
+                "collected_amount",
+            }
+            and value is not None
+        ):
+            output[key] = float(value)
+        else:
+            output[key] = value
+
+    return output
+
+
+# ------------------------------------------------------------
+# CEO orchestration
+# ------------------------------------------------------------
+
+async def _ceo_orchestrate_request(
+    db: AsyncSession,
+    user_text: str,
+    conversation_id,
+):
+    cleaned = (user_text or "").strip()
+
+    if not cleaned:
+        return None
+
+    instructions = (
+        "You are the internal orchestration planner for Enclave AI. "
+        "Decide whether the CEO Agent request needs specialist work. "
+        "Allowed agents: sales, finance, hr, procurement, marketing, "
+        "admin, legal, it, audit. Delegate work that must be prepared, "
+        "reviewed, analyzed, tracked or coordinated. Do not delegate "
+        "simple questions or casual conversation. Never invent dates, "
+        "amounts, recipients, commitments or facts. Internal drafting "
+        "and analysis may complete immediately. External communications, "
+        "invoice sending, payments, accounting posting, bank transfers, "
+        "approvals, deployments and filings remain approval-gated. "
+        "Preserve named accountable people exactly. Use max 5 delegations. "
+        "Return JSON only with keys: should_delegate, title, priority, "
+        "delegations. Each delegation has agent_slug, title, instruction, "
+        "accountable_person, requires_user_approval, "
+        "requires_external_action. If no delegation return "
+        "{\"should_delegate\": false}."
+    )
+
+    try:
+        response = await openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=instructions,
+            input=cleaned,
+            store=False,
+        )
+        plan = _cf_json(response.output_text)
+    except Exception:
+        return None
+
+    if not plan.get("should_delegate"):
+        return None
+
+    ceo = (
+        await db.execute(
+            select(Agent).where(
+                Agent.slug == "ceo"
+            )
+        )
+    ).scalars().first()
+
+    if ceo is None:
+        return None
+
+    priority = str(
+        plan.get("priority", "normal")
+    ).strip().lower()
+
+    if priority not in _CF_PRIORITIES:
+        priority = "normal"
+
+    work_order = Task(
+        agent_id=ceo.id,
+        source_conversation_id=conversation_id,
+        title=(
+            str(plan.get("title", "")).strip()
+            or "CEO Work Order"
+        )[:255],
+        description=cleaned[:10000],
+        status="in_progress",
+        priority=priority,
+        due_at=None,
+        payload={
+            "kind": "ceo_work_order",
+            "user_request": cleaned[:10000],
+            "delegations": [],
+        },
+    )
+
+    db.add(work_order)
+    await db.flush()
+
+    results = []
+    pending_count = 0
+
+    for item in (plan.get("delegations") or [])[:5]:
+        slug = str(
+            item.get("agent_slug", "")
+        ).strip().lower()
+
+        if slug not in _CF_ALLOWED_AGENTS:
+            continue
+
+        agent = (
+            await db.execute(
+                select(Agent).where(
+                    Agent.slug == slug
+                )
+            )
+        ).scalars().first()
+
+        if agent is None:
+            continue
+
+        title = str(
+            item.get("title", "")
+        ).strip()
+
+        instruction = str(
+            item.get("instruction", "")
+        ).strip()
+
+        if not title or not instruction:
+            continue
+
+        accountable_person = (
+            str(
+                item.get(
+                    "accountable_person",
+                    "",
+                )
+                or ""
+            ).strip()
+            or None
+        )
+
+        child = Task(
+            agent_id=agent.id,
+            source_conversation_id=conversation_id,
+            title=title[:255],
+            description=instruction[:8000],
+            status="in_progress",
+            priority=priority,
+            due_at=None,
+            payload={
+                "kind": "ceo_delegation",
+                "parent_work_order_id": str(work_order.id),
+                "accountable_person": accountable_person,
+                "requires_user_approval": bool(
+                    item.get(
+                        "requires_user_approval",
+                        False,
+                    )
+                ),
+                "requires_external_action": bool(
+                    item.get(
+                        "requires_external_action",
+                        False,
+                    )
+                ),
+            },
+        )
+
+        db.add(child)
+        await db.flush()
+
+        internal_result = None
+        internal_error = None
+
+        try:
+            specialist_instructions = (
+                (agent.system_prompt or "")
+                + "\n\n"
+                + (
+                    "You are responding internally to the CEO Agent. "
+                    "Complete the assigned analysis, draft or review now. "
+                    "Never claim external communication, invoice sending, "
+                    "payment, accounting posting, bank transfer, deployment, "
+                    "approval or filing occurred unless system evidence "
+                    "explicitly proves it."
+                )
+            )
+
+            specialist_response = (
+                await openai_client.responses.create(
+                    model=OPENAI_MODEL,
+                    instructions=specialist_instructions,
+                    input=(
+                        "CEO request:\n"
+                        + cleaned
+                        + "\n\nAssigned task:\n"
+                        + instruction
+                    ),
+                    store=False,
+                )
+            )
+
+            internal_result = (
+                specialist_response.output_text
+                or ""
+            ).strip()
+
+        except Exception as exc:
+            internal_error = type(exc).__name__
+
+        hold = (
+            bool(
+                item.get(
+                    "requires_user_approval",
+                    False,
+                )
+            )
+            or bool(
+                item.get(
+                    "requires_external_action",
+                    False,
+                )
+            )
+            or bool(internal_error)
+        )
+
+        if hold:
+            child.status = "pending"
+            pending_count += 1
+        else:
+            child.status = "completed"
+            child.completed_at = _cf_datetime.now(
+                _cf_timezone.utc
+            )
+
+        child.payload = {
+            **(child.payload or {}),
+            "internal_result": (
+                internal_result[:12000]
+                if internal_result
+                else None
+            ),
+            "internal_error": internal_error,
+        }
+
+        results.append({
+            "task_id": str(child.id),
+            "agent_slug": slug,
+            "title": title,
+            "status": child.status,
+            "accountable_person": accountable_person,
+            "internal_result": (
+                internal_result[:6000]
+                if internal_result
+                else None
+            ),
+        })
+
+    work_order.payload = {
+        **(work_order.payload or {}),
+        "delegations": results,
+    }
+
+    if results and pending_count == 0:
+        work_order.status = "completed"
+        work_order.completed_at = _cf_datetime.now(
+            _cf_timezone.utc
+        )
+
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="ceo.work_order.orchestrated",
+        details={
+            "work_order_id": str(work_order.id),
+            "delegation_count": len(results),
+            "pending_count": pending_count,
+            "agents": [
+                x["agent_slug"]
+                for x in results
+            ],
+        },
+    )
+
+    return {
+        "delegated": True,
+        "work_order_id": str(work_order.id),
+        "status": work_order.status,
+        "delegations": results,
+    }
+
+
+@app.get("/api/ceo/work-orders")
+async def list_ceo_work_orders(
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(Task)
+            .where(
+                Task.payload["kind"].astext
+                == "ceo_work_order"
+            )
+            .order_by(Task.created_at.desc())
+            .limit(200)
+        )
+    ).scalars().all()
+
+    return [
+        {
+            "id": str(row.id),
+            "title": row.title,
+            "status": row.status,
+            "priority": row.priority,
+            "payload": row.payload,
+            "created_at": (
+                row.created_at.isoformat()
+                if row.created_at
+                else None
+            ),
+        }
+        for row in rows
+    ]
+
+
+# ------------------------------------------------------------
+# Business accountability
+# ------------------------------------------------------------
+
+class BusinessWorkItemCreateRequest(BaseModel):
+    title: str
+    description: str | None = None
+    accountable_person: str
+    accountable_role: str | None = None
+    agent_slug: str = "sales"
+    priority: str = "normal"
+    due_at: _cf_datetime | None = None
+
+
+@app.post("/api/operations/work-items")
+async def create_business_work_item(
+    payload: BusinessWorkItemCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    person = payload.accountable_person.strip()
+
+    if not person:
+        raise HTTPException(
+            status_code=400,
+            detail="Accountable person is required",
+        )
+
+    if payload.priority not in _CF_PRIORITIES:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid priority",
+        )
+
+    agent = (
+        await db.execute(
+            select(Agent).where(
+                Agent.slug == payload.agent_slug
+            )
+        )
+    ).scalars().first()
+
+    if agent is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Agent not found",
+        )
+
+    task = Task(
+        agent_id=agent.id,
+        source_conversation_id=None,
+        title=payload.title.strip(),
+        description=(
+            payload.description.strip()
+            if payload.description
+            else None
+        ),
+        status="pending",
+        priority=payload.priority,
+        due_at=payload.due_at,
+        payload={
+            "kind": "business_work_item",
+            "accountable_person": person,
+            "accountable_role": payload.accountable_role,
+            "evidence_required": True,
+        },
+    )
+
+    db.add(task)
+    await db.flush()
+
+    await write_audit_log(
+        db,
+        actor="CSSO",
+        action="operations.work_item.created",
+        details={
+            "task_id": str(task.id),
+            "accountable_person": person,
+            "title": task.title,
+        },
+    )
+
+    await db.commit()
+
+    return {
+        "id": str(task.id),
+        "status": task.status,
+    }
+
+
+def _cf_person_aliases(value):
+    cleaned = value.strip().casefold()
+    aliases = {cleaned}
+
+    fahad = {
+        "فهد العنزي",
+        "fahad alenzi",
+        "fahad alanazi",
+        "fahad al enzi",
+        "fahad al-anazi",
+        "fahad alenazi",
+    }
+
+    if cleaned in {
+        item.casefold()
+        for item in fahad
+    }:
+        aliases.update(
+            item.casefold()
+            for item in fahad
+        )
+
+    return aliases
+
+
+@app.get("/api/operations/accountability-report")
+async def business_accountability_report(
+    person: str,
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+):
+    person = person.strip()
+
+    if not person:
+        raise HTTPException(
+            status_code=400,
+            detail="person is required",
+        )
+
+    aliases = _cf_person_aliases(person)
+
+    cutoff = _cf_datetime.now(
+        _cf_timezone.utc
+    ) - _cf_timedelta(
+        days=max(
+            1,
+            min(
+                int(days),
+                365,
+            ),
+        )
+    )
+
+    tasks = (
+        await db.execute(
+            select(Task)
+            .where(Task.created_at >= cutoff)
+            .order_by(Task.created_at.desc())
+            .limit(500)
+        )
+    ).scalars().all()
+
+    work_items = []
+
+    for row in tasks:
+        payload = row.payload or {}
+
+        accountable = str(
+            payload.get(
+                "accountable_person",
+                "",
+            )
+            or ""
+        ).strip().casefold()
+
+        if accountable not in aliases:
+            continue
+
+        work_items.append({
+            "id": str(row.id),
+            "title": row.title,
+            "description": row.description,
+            "status": row.status,
+            "priority": row.priority,
+            "due_at": (
+                row.due_at.isoformat()
+                if row.due_at
+                else None
+            ),
+            "completed_at": (
+                row.completed_at.isoformat()
+                if row.completed_at
+                else None
+            ),
+        })
+
+    lead_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  code,
+                  company_name,
+                  owner_name,
+                  relationship_owner,
+                  status,
+                  next_step,
+                  next_step_date
+                FROM sales_leads
+                WHERE created_at >= :cutoff
+                """
+            ),
+            {"cutoff": cutoff},
+        )
+    ).mappings().all()
+
+    leads = []
+
+    for row in lead_rows:
+        owners = {
+            str(
+                row["owner_name"]
+                or ""
+            ).strip().casefold(),
+            str(
+                row["relationship_owner"]
+                or ""
+            ).strip().casefold(),
+        }
+
+        if owners & aliases:
+            leads.append({
+                "code": row["code"],
+                "company_name": row["company_name"],
+                "status": row["status"],
+                "next_step": row["next_step"],
+                "next_step_date": (
+                    row["next_step_date"].isoformat()
+                    if row["next_step_date"]
+                    else None
+                ),
+            })
+
+    opportunity_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  code,
+                  name,
+                  owner_name,
+                  status,
+                  stage,
+                  net_revenue_ex_vat,
+                  gross_profit,
+                  next_step,
+                  next_step_date
+                FROM sales_opportunities
+                WHERE created_at >= :cutoff
+                """
+            ),
+            {"cutoff": cutoff},
+        )
+    ).mappings().all()
+
+    opportunities = []
+
+    for row in opportunity_rows:
+        if (
+            str(
+                row["owner_name"]
+                or ""
+            ).strip().casefold()
+            not in aliases
+        ):
+            continue
+
+        opportunities.append({
+            "code": row["code"],
+            "name": row["name"],
+            "status": row["status"],
+            "stage": row["stage"],
+            "net_revenue_ex_vat": float(
+                row["net_revenue_ex_vat"]
+                or 0
+            ),
+            "gross_profit": float(
+                row["gross_profit"]
+                or 0
+            ),
+            "next_step": row["next_step"],
+            "next_step_date": (
+                row["next_step_date"].isoformat()
+                if row["next_step_date"]
+                else None
+            ),
+        })
+
+    now_utc = _cf_datetime.now(
+        _cf_timezone.utc
+    )
+
+    completed = sum(
+        1
+        for item in work_items
+        if item["status"] == "completed"
+    )
+
+    open_count = sum(
+        1
+        for item in work_items
+        if item["status"]
+        in {"pending", "in_progress"}
+    )
+
+    overdue = 0
+
+    for item in work_items:
+        if (
+            item["status"]
+            in {"pending", "in_progress"}
+            and item["due_at"]
+        ):
+            try:
+                if _cf_datetime.fromisoformat(
+                    item["due_at"]
+                ) < now_utc:
+                    overdue += 1
+            except Exception:
+                pass
+
+    return {
+        "person": person,
+        "summary": {
+            "assigned": len(work_items),
+            "completed": completed,
+            "open": open_count,
+            "overdue": overdue,
+            "leads": len(leads),
+            "opportunities": len(opportunities),
+        },
+        "work_items": work_items,
+        "sales": {
+            "leads": leads,
+            "opportunities": opportunities,
+        },
+        "evidence_based": True,
+        "employee_record_required": False,
+    }
+
+
+# ------------------------------------------------------------
+# Daily report and go-live status
+# ------------------------------------------------------------
+
+async def _cf_daily_report(
+    db,
+    report_date=None,
+):
+    day, start_utc, end_utc = _cf_day_bounds(
+        report_date
+    )
+
+    dashboard = await commercial_finance_dashboard(
+        db
+    )
+
+    return {
+        "report_date": day.isoformat(),
+        "generated_at": _cf_datetime.now(
+            _CF_RIYADH
+        ).isoformat(),
+        "audit_events": int(
+            await _cf_scalar(
+                db,
+                """
+                SELECT count(*)
+                FROM audit_logs
+                WHERE created_at>=:start_utc
+                  AND created_at<:end_utc
+                """,
+                {
+                    "start_utc": start_utc,
+                    "end_utc": end_utc,
+                },
+            )
+            or 0
+        ),
+        "sales": {
+            "new_leads": int(
+                await _cf_scalar(
+                    db,
+                    """
+                    SELECT count(*)
+                    FROM sales_leads
+                    WHERE created_at>=:start_utc
+                      AND created_at<:end_utc
+                    """,
+                    {
+                        "start_utc": start_utc,
+                        "end_utc": end_utc,
+                    },
+                )
+                or 0
+            ),
+            "new_opportunities": int(
+                await _cf_scalar(
+                    db,
+                    """
+                    SELECT count(*)
+                    FROM sales_opportunities
+                    WHERE created_at>=:start_utc
+                      AND created_at<:end_utc
+                    """,
+                    {
+                        "start_utc": start_utc,
+                        "end_utc": end_utc,
+                    },
+                )
+                or 0
+            ),
+        },
+        "commercial_finance":
+            dashboard["summary"],
+        "commercial_alerts":
+            dashboard["alerts"],
+        "tasks": {
+            "open": int(
+                await _cf_scalar(
+                    db,
+                    """
+                    SELECT count(*)
+                    FROM tasks
+                    WHERE status IN (
+                      'pending',
+                      'in_progress'
+                    )
+                    """
+                )
+                or 0
+            ),
+            "overdue": int(
+                await _cf_scalar(
+                    db,
+                    """
+                    SELECT count(*)
+                    FROM tasks
+                    WHERE due_at IS NOT NULL
+                      AND due_at < now()
+                      AND status IN (
+                        'pending',
+                        'in_progress'
+                      )
+                    """
+                )
+                or 0
+            ),
+        },
+        "approvals": {
+            "pending": int(
+                await _cf_scalar(
+                    db,
+                    """
+                    SELECT count(*)
+                    FROM approvals
+                    WHERE status='pending'
+                    """
+                )
+                or 0
+            ),
+        },
+    }
+
+
+@app.get("/api/operations/daily-report")
+async def get_daily_operations_report(
+    report_date: _cf_date | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    return await _cf_daily_report(
+        db,
+        report_date,
+    )
+
+
+@app.post("/api/operations/daily-report/refresh")
+async def save_daily_operations_report(
+    report_date: _cf_date | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    report = await _cf_daily_report(
+        db,
+        report_date,
+    )
+
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="ceo.daily_operations_report.generated",
+        details=report,
+    )
+
+    await db.commit()
+
+    return report
+
+
+@app.get("/api/operations/go-live-status")
+async def commercial_go_live_status(
+    db: AsyncSession = Depends(get_db),
+):
+    dashboard = await commercial_finance_dashboard(
+        db
+    )
+
+    return {
+        "sales": {
+            "status": "live_ready",
+            "note": (
+                "Sales CRM is ready for live production data."
+            ),
+        },
+        "commercial_finance": {
+            "status": "live_ready",
+            "scope": [
+                "financial_proposals",
+                "billing_schedule",
+                "commercial_invoices",
+                "collections",
+                "alerts",
+            ],
+            "summary": dashboard["summary"],
+        },
+        "hidden_from_daily_finance_ui": [
+            "chart_of_accounts",
+            "journals",
+            "bank_reconciliation",
+            "budgets",
+            "fixed_assets",
+        ],
+        "safety": {
+            "automatic_invoice_draft_preparation": True,
+            "invoice_issue_requires_approval": True,
+            "automatic_external_invoice_send": False,
+            "automatic_accounting_posting": False,
+            "automatic_bank_transfer": False,
+        },
+    }

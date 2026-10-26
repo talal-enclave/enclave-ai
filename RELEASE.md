@@ -64,3 +64,15 @@ Tag: `v1.0.0`
 - No action due dates or owners are invented; unconfirmed values remain blank.
 - Existing compliance status remains authoritative in Government Compliance.
 - Production web builds use Next.js Webpack mode to avoid the observed Turbopack next/font/google internal resolver failure.
+
+## v1.1.0 sales + commercial finance command center
+
+- Sales live-ready.
+- Finance daily landing page is Commercial Finance only: Financial Proposals, Billing Schedule, Commercial Invoices, Collections and Alerts.
+- Existing accounting engine remains in the backend and is preserved at /finance/accounting but is not linked from the daily finance landing page.
+- Approved/active quotations can receive a billing schedule with separate invoice issue date and payment due date.
+- Due invoices are prepared automatically as draft commercial invoices at 06:45 Asia/Riyadh.
+- Commercial invoice issuance requires explicit user approval.
+- Invoice issuance does not send externally and does not create accounting postings or bank transfers.
+- Collection recording requires evidence/reference.
+- CEO cross-functional internal orchestration, Daily Operations Report and Business Accountability Report enabled.
