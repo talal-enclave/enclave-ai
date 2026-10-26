@@ -122,6 +122,10 @@ export default function Home() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [approvals, setApprovals] = useState([]);
   const [approvalsLoading, setApprovalsLoading] = useState(false);
+  // CEO CHAT ATTACHMENTS v1.1.1
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [ceoAttachments, setCeoAttachments] = useState([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const [agentRegistry, setAgentRegistry] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [overviewLoading, setOverviewLoading] = useState(true);
@@ -288,6 +292,7 @@ export default function Home() {
     } catch (err) {
       alert(err.message);
     } finally {
+      setUploadingFiles(false);
       setLoading(false);
     }
   }
@@ -296,6 +301,8 @@ export default function Home() {
     setConversationId(null);
     setMessages([]);
     setMessage("");
+    setPendingFiles([]);
+    setCeoAttachments([]);
   }
 
   function changeAgent(slug) {
@@ -305,6 +312,8 @@ export default function Home() {
     setMessage("");
     setConversations([]);
     setTasks([]);
+    setPendingFiles([]);
+    setCeoAttachments([]);
   }
 
   function enterOffice(slug) {
@@ -317,12 +326,110 @@ export default function Home() {
     }, 50);
   }
 
+  async function loadCeoAttachments(id) {
+    if (!id || selected !== "ceo") {
+      setCeoAttachments([]);
+      return;
+    }
+
+    try {
+      const params = new URLSearchParams({
+        module: "ceo_chat",
+        entity_type: "conversation",
+        entity_id: id,
+        status: "active",
+      });
+
+      const res = await fetch(
+        `/api/hr/attachments?${params.toString()}`
+      );
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(
+          data.detail || "تعذر تحميل مرفقات الرئيس التنفيذي"
+        );
+      }
+
+      setCeoAttachments(
+        Array.isArray(data) ? data : []
+      );
+    } catch {
+      setCeoAttachments([]);
+    }
+  }
+
+  useEffect(() => {
+    if (selected === "ceo" && conversationId) {
+      loadCeoAttachments(conversationId);
+    } else {
+      setCeoAttachments([]);
+    }
+  }, [selected, conversationId]);
+
+  async function ensureCeoConversation(currentId) {
+    if (currentId) return currentId;
+
+    const res = await fetch(
+      "/api/ceo/conversations/bootstrap",
+      { method: "POST" }
+    );
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(
+        data.detail || "تعذر إنشاء محادثة لإرفاق الملفات"
+      );
+    }
+
+    setConversationId(data.conversation_id);
+    return data.conversation_id;
+  }
+
+  async function uploadCeoFiles(targetConversationId, files) {
+    const uploaded = [];
+
+    for (const file of files) {
+      const form = new FormData();
+
+      form.append("module", "ceo_chat");
+      form.append("entity_type", "conversation");
+      form.append("entity_id", targetConversationId);
+      form.append("document_type", "ceo_reference");
+      form.append("uploaded_by", "user");
+      form.append("confidentiality_level", "confidential");
+      form.append("title", file.name);
+      form.append("description", "CEO chat source attachment");
+      form.append("file", file);
+
+      const res = await fetch(
+        "/api/hr/attachments/upload",
+        {
+          method: "POST",
+          body: form,
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(
+          data.detail || `تعذر رفع الملف ${file.name}`
+        );
+      }
+
+      uploaded.push(data);
+    }
+
+    return uploaded;
+  }
+
   async function sendMessage(event) {
     event.preventDefault();
 
-    if (!message.trim() || loading) return;
+    if (((!message.trim()) && pendingFiles.length === 0) || loading || uploadingFiles) return;
 
-    const userText = message.trim();
+    const userText = message.trim() || "راجع الملفات المرفقة في هذه المحادثة.";
 
     setMessages((previous) => [
       ...previous,
@@ -333,6 +440,28 @@ export default function Home() {
     setLoading(true);
 
     try {
+      let activeConversationId = conversationId;
+
+      if (
+        selected === "ceo"
+        && pendingFiles.length > 0
+      ) {
+        setUploadingFiles(true);
+
+        activeConversationId =
+          await ensureCeoConversation(
+            activeConversationId
+          );
+
+        await uploadCeoFiles(
+          activeConversationId,
+          pendingFiles
+        );
+
+        setPendingFiles([]);
+        await loadCeoAttachments(activeConversationId);
+      }
+
       const res = await fetch(`/api/chat/${selected}`, {
         method: "POST",
         headers: {
@@ -340,7 +469,7 @@ export default function Home() {
         },
         body: JSON.stringify({
           message: userText,
-          conversation_id: conversationId,
+          conversation_id: activeConversationId,
         }),
       });
 
@@ -764,15 +893,150 @@ export default function Home() {
               )}
             </div>
 
-            <form className={styles.chatComposer} onSubmit={sendMessage}>
+            {selected === "ceo" && (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  marginBottom: 10,
+                }}
+              >
+                {pendingFiles.map((file, index) => (
+                  <span
+                    key={`${file.name}-${file.size}-${index}`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "6px 9px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(47,180,141,.35)",
+                      background: "rgba(47,180,141,.10)",
+                      fontSize: 12,
+                    }}
+                  >
+                    📎 {file.name}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingFiles(
+                          (previous) =>
+                            previous.filter(
+                              (_, itemIndex) =>
+                                itemIndex !== index
+                            )
+                        )
+                      }
+                      style={{
+                        border: 0,
+                        background: "transparent",
+                        color: "inherit",
+                        cursor: "pointer",
+                        padding: 0,
+                        fontSize: 16,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+
+                {ceoAttachments.map((item) => (
+                  <a
+                    key={item.id}
+                    href={item.download_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      padding: "6px 9px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(217,201,170,.32)",
+                      background: "rgba(217,201,170,.08)",
+                      color: "inherit",
+                      textDecoration: "none",
+                      fontSize: 12,
+                    }}
+                  >
+                    📄{" "}
+                    {item.original_file_name
+                      || item.title
+                      || "Attachment"}
+                  </a>
+                ))}
+              </div>
+            )}
+
+            <form
+              className={styles.chatComposer}
+              onSubmit={sendMessage}
+            >
+              {selected === "ceo" && (
+                <label
+                  title="إرفاق ملفات للرئيس التنفيذي"
+                  style={{
+                    width: 44,
+                    minWidth: 44,
+                    height: 44,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: 10,
+                    border: "1px solid rgba(47,180,141,.35)",
+                    background: "rgba(47,180,141,.10)",
+                    cursor:
+                      loading || uploadingFiles
+                        ? "wait"
+                        : "pointer",
+                    fontSize: 19,
+                  }}
+                >
+                  📎
+                  <input
+                    type="file"
+                    multiple
+                    accept=".pdf,.docx,.txt,.csv"
+                    disabled={loading || uploadingFiles}
+                    onChange={(event) => {
+                      const files = Array.from(
+                        event.target.files || []
+                      );
+
+                      setPendingFiles(
+                        (previous) => [
+                          ...previous,
+                          ...files,
+                        ].slice(0, 10)
+                      );
+
+                      event.target.value = "";
+                    }}
+                    style={{ display: "none" }}
+                  />
+                </label>
+              )}
+
               <input
                 value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                placeholder={`اسأل ${activeAgent.ar}...`}
-                disabled={loading}
+                onChange={(event) =>
+                  setMessage(event.target.value)
+                }
+                placeholder={
+                  selected === "ceo"
+                    ? "اكتب طلبك وارفق العرض الفني والمالي..."
+                    : `اسأل ${activeAgent.ar}...`
+                }
+                disabled={loading || uploadingFiles}
               />
-              <button type="submit" disabled={loading}>
-                إرسال
+
+              <button
+                type="submit"
+                disabled={loading || uploadingFiles}
+              >
+                {uploadingFiles
+                  ? "جاري الرفع..."
+                  : "إرسال"}
               </button>
             </form>
           </div>

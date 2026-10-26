@@ -1901,18 +1901,51 @@ async def chat_with_agent(
         }
     )
 
-    # CEO ORCHESTRATION HOOK v1.1.0
+    # CEO ORCHESTRATION HOOK v1.1.1
     ceo_orchestration = None
+    ceo_attachment_context = ""
 
     if agent.slug == "ceo":
         try:
+            ceo_attachment_context = (
+                await _ceo_attachment_context(
+                    db,
+                    conversation.id,
+                )
+            )
+
+            orchestration_input = request.message
+
+            if ceo_attachment_context:
+                effective_instructions = (
+                    effective_instructions
+                    + "\n\n"
+                    + ceo_attachment_context
+                    + "\n\n"
+                    + (
+                        "The attached documents are user-provided source "
+                        "material. Base document-specific statements on "
+                        "what they actually contain. If a fact is not "
+                        "supported by them, say so."
+                    )
+                )
+
+                orchestration_input = (
+                    orchestration_input
+                    + "\n\n"
+                    + ceo_attachment_context
+                )
+
             ceo_orchestration = await _ceo_orchestrate_request(
                 db,
-                request.message,
+                orchestration_input,
                 conversation.id,
             )
 
-            if ceo_orchestration and ceo_orchestration.get("delegated"):
+            if (
+                ceo_orchestration
+                and ceo_orchestration.get("delegated")
+            ):
                 effective_instructions = (
                     effective_instructions
                     + "\n\nINTERNAL CEO ORCHESTRATION RESULTS:\n"
@@ -1924,6 +1957,7 @@ async def chat_with_agent(
                     + "\nUse these results in one consolidated answer. "
                       "Do not claim external execution unless proven."
                 )
+
         except Exception:
             ceo_orchestration = None
 
@@ -77702,4 +77736,204 @@ async def commercial_go_live_status(
             "automatic_accounting_posting": False,
             "automatic_bank_transfer": False,
         },
+    }
+
+# ============================================================
+# ENCLAVE v1.1.1 - CEO CHAT ATTACHMENTS
+# ============================================================
+
+_CEO_ATTACHMENT_TEXT_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".txt",
+    ".csv",
+}
+_CEO_ATTACHMENT_MAX_FILES = 10
+_CEO_ATTACHMENT_MAX_PER_FILE_CHARS = 30000
+_CEO_ATTACHMENT_MAX_TOTAL_CHARS = 120000
+
+
+def _ceo_attachment_storage_target(storage_key: str):
+    from pathlib import Path as _CEOPath
+
+    root = _CEOPath(
+        os.environ.get(
+            "HR_ATTACHMENTS_DIR",
+            "/var/lib/talal-enclave/hr-attachments",
+        )
+    ).resolve()
+
+    target = (root / storage_key).resolve()
+
+    if target != root and root not in target.parents:
+        raise ValueError(
+            "Attachment storage path escapes configured root"
+        )
+
+    return target
+
+
+def _ceo_extract_stored_attachment_text(
+    attachment: HRAttachment,
+):
+    from io import BytesIO
+
+    target = _ceo_attachment_storage_target(
+        attachment.storage_key
+    )
+
+    if not target.exists():
+        return "[Attachment file is missing from storage]"
+
+    content = target.read_bytes()
+    extension = (
+        attachment.file_extension
+        or target.suffix
+        or ""
+    ).lower()
+
+    if extension not in _CEO_ATTACHMENT_TEXT_EXTENSIONS:
+        return (
+            "[Stored successfully; text extraction is not "
+            f"enabled for {extension or 'this file type'}]"
+        )
+
+    try:
+        if extension == ".pdf":
+            from pypdf import PdfReader
+
+            reader = PdfReader(BytesIO(content))
+            chunks = []
+
+            for page in reader.pages:
+                try:
+                    chunks.append(page.extract_text() or "")
+                except Exception:
+                    pass
+
+            extracted = "\n".join(chunks).strip()
+
+        elif extension == ".docx":
+            from docx import Document
+
+            document = Document(BytesIO(content))
+
+            extracted = "\n".join(
+                paragraph.text
+                for paragraph in document.paragraphs
+            ).strip()
+
+        else:
+            extracted = content.decode(
+                "utf-8",
+                errors="ignore",
+            ).strip()
+
+    except Exception as exc:
+        return (
+            "[Stored successfully; text extraction failed: "
+            f"{type(exc).__name__}]"
+        )
+
+    if not extracted:
+        return (
+            "[Stored successfully; no extractable text was found. "
+            "The document may be scanned/image-only.]"
+        )
+
+    return extracted[:_CEO_ATTACHMENT_MAX_PER_FILE_CHARS]
+
+
+async def _ceo_attachment_context(
+    db: AsyncSession,
+    conversation_id: uuid.UUID,
+):
+    rows = (
+        await db.execute(
+            select(HRAttachment).where(
+                HRAttachment.module == "ceo_chat",
+                HRAttachment.entity_type == "conversation",
+                HRAttachment.entity_id == conversation_id,
+                HRAttachment.status == "active",
+            ).order_by(
+                HRAttachment.created_at.asc()
+            )
+        )
+    ).scalars().all()
+
+    if not rows:
+        return ""
+
+    selected = rows[-_CEO_ATTACHMENT_MAX_FILES:]
+    chunks = []
+    total = 0
+
+    for attachment in selected:
+        name = (
+            attachment.original_file_name
+            or attachment.title
+            or "attachment"
+        )
+
+        extracted = _ceo_extract_stored_attachment_text(
+            attachment
+        )
+
+        section = (
+            f"FILE: {name}\n"
+            f"DOCUMENT TYPE: {attachment.document_type}\n"
+            "CONTENT:\n"
+            f"{extracted}\n"
+        )
+
+        remaining = (
+            _CEO_ATTACHMENT_MAX_TOTAL_CHARS - total
+        )
+
+        if remaining <= 0:
+            break
+
+        section = section[:remaining]
+        chunks.append(section)
+        total += len(section)
+
+    return (
+        "ATTACHED DOCUMENTS FOR THIS CEO CONVERSATION\n"
+        "Use these documents as source material. Preserve their "
+        "terminology and do not invent missing facts.\n\n"
+        + "\n---\n".join(chunks)
+    )
+
+
+@app.post("/api/ceo/conversations/bootstrap")
+async def bootstrap_ceo_file_conversation(
+    db: AsyncSession = Depends(get_db),
+):
+    agent = (
+        await db.execute(
+            select(Agent).where(
+                Agent.slug == "ceo"
+            )
+        )
+    ).scalars().first()
+
+    if agent is None:
+        raise HTTPException(
+            status_code=404,
+            detail="CEO Agent not found",
+        )
+
+    conversation = Conversation(
+        agent_id=agent.id,
+        title="CEO File Review",
+    )
+
+    db.add(conversation)
+    await db.commit()
+    await db.refresh(conversation)
+
+    return {
+        "conversation_id": str(conversation.id),
+        "agent_slug": "ceo",
+        "title": conversation.title,
     }

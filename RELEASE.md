@@ -76,3 +76,13 @@ Tag: `v1.0.0`
 - Invoice issuance does not send externally and does not create accounting postings or bank transfers.
 - Collection recording requires evidence/reference.
 - CEO cross-functional internal orchestration, Daily Operations Report and Business Accountability Report enabled.
+
+## v1.1.1 CEO chat attachments
+
+- Added direct multi-file attachment support to the CEO Agent chat.
+- CEO chat attachments use the existing Unified Attachments storage and are linked to the conversation.
+- Supported CEO text extraction in this release: PDF, DOCX, TXT and CSV.
+- Active attachments remain available as source context in later messages in the same CEO conversation.
+- CEO orchestration receives the same attachment context for internal specialist work.
+- Scanned/image-only documents are stored but are treated as non-extractable rather than guessed.
+- Uploading files does not trigger external sending, payment, accounting posting, or other external execution.
