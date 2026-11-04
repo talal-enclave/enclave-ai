@@ -1985,6 +1985,13 @@ async def chat_with_agent(
                       "Do not count CEO orchestration/delegation tasks "
                       "or the current lookup request itself as evidence "
                       "of work assigned to the named person."
+                      "For proposal readiness, report only the exact "
+                      "missing_required fields returned by system evidence. "
+                      "Do not ask the user for system-derived IDs or VAT "
+                      "status that are already in system_known. Read-only "
+                      "system queries do not require approval. Treat "
+                      "artifact_generation true/false as capability flags, "
+                      "not as proof that a document exists."
                 )
                 orchestration_input = (
                     orchestration_input
@@ -1992,11 +1999,17 @@ async def chat_with_agent(
                     + execution_json
                 )
 
-            ceo_orchestration = await _ceo_orchestrate_request(
-                db,
-                orchestration_input,
-                conversation.id,
+            execution_handled = bool(
+                ceo_execution
+                and ceo_execution.get("handled")
             )
+
+            if not execution_handled:
+                ceo_orchestration = await _ceo_orchestrate_request(
+                    db,
+                    orchestration_input,
+                    conversation.id,
+                )
 
             if (
                 ceo_orchestration
@@ -78128,6 +78141,7 @@ async def ceo_office_status(
 
 _CEO_EXEC_ACTIONS = {
     "get_client_state",
+    "get_proposal_readiness",
     "get_finance_status",
     "get_daily_report",
     "get_accountability",
@@ -78512,6 +78526,185 @@ async def _ceo_exec_client_state(db: AsyncSession, client_name: str):
     }
 
 
+# ENCLAVE v1.3.3 - DETERMINISTIC PROPOSAL READINESS
+async def _ceo_exec_proposal_readiness(
+    db: AsyncSession,
+    client_name: str,
+):
+    account = await _ceo_exec_find_account(db, client_name)
+
+    if account is None:
+        return {
+            "client_name": client_name,
+            "ready": False,
+            "stage": "client_missing",
+            "missing_required": ["sales_account"],
+            "system_known": {},
+            "required_for_proposal_record": [
+                "line.description",
+                "line.quantity",
+                "line.unit_price",
+                "line.direct_cost",
+            ],
+            "optional_for_proposal_record": [
+                "discount_amount",
+                "validity_date",
+                "payment_terms",
+                "scope_summary",
+                "notes",
+            ],
+            "not_required_for_proposal_record": [
+                "billing_address",
+                "currency",
+                "salesperson_internal_number",
+                "existing_quote_reference",
+                "internal_approval_before_draft",
+            ],
+            "artifact_generation": {
+                "financial_proposal_docx": False,
+                "financial_proposal_pdf": False,
+            },
+        }
+
+    opportunity, reason = await _ceo_exec_single_open_opportunity(
+        db,
+        account["id"],
+    )
+
+    if opportunity is None:
+        return {
+            "client_name": client_name,
+            "ready": False,
+            "stage": "opportunity_resolution",
+            "reason": reason,
+            "missing_required": ["single_open_sales_opportunity"],
+            "system_known": {
+                "account_id": str(account["id"]),
+                "account_code": account["code"],
+                "account_name": account["name"],
+            },
+            "required_for_proposal_record": [
+                "line.description",
+                "line.quantity",
+                "line.unit_price",
+                "line.direct_cost",
+            ],
+            "artifact_generation": {
+                "financial_proposal_docx": False,
+                "financial_proposal_pdf": False,
+            },
+        }
+
+    current_quotes = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    version,
+                    status,
+                    net_revenue_ex_vat,
+                    direct_cost,
+                    gross_margin_pct,
+                    vat_rate_pct,
+                    approval_id,
+                    created_at
+                FROM sales_quotations
+                WHERE opportunity_id=:opportunity_id
+                ORDER BY created_at DESC
+                """
+            ),
+            {"opportunity_id": opportunity["id"]},
+        )
+    ).mappings().all()
+
+    profile = (
+        await db.execute(
+            text(
+                """
+                SELECT vat_status, vat_number
+                FROM company_profiles
+                WHERE profile_key='primary'
+                LIMIT 1
+                """
+            )
+        )
+    ).mappings().first()
+
+    vat_status = (
+        profile["vat_status"]
+        if profile
+        else "not_registered"
+    )
+    vat_number = (
+        profile["vat_number"]
+        if profile
+        else None
+    )
+
+    return {
+        "client_name": client_name,
+        "ready": False,
+        "stage": "commercial_inputs",
+        "missing_required": [
+            "line.description",
+            "line.quantity",
+            "line.unit_price",
+            "line.direct_cost",
+        ],
+        "system_known": {
+            "account_id": str(account["id"]),
+            "account_code": account["code"],
+            "account_name": account["name"],
+            "opportunity_id": str(opportunity["id"]),
+            "opportunity_code": opportunity["code"],
+            "opportunity_name": opportunity["name"],
+            "vat_status": vat_status,
+            "vat_number": vat_number,
+            "vat_rate_for_commercial_proposal": 0,
+            "existing_quotation_count": len(current_quotes),
+            "existing_quotations": [
+                _ceo_exec_row(row)
+                for row in current_quotes
+            ],
+        },
+        "required_for_proposal_record": [
+            "line.description",
+            "line.quantity",
+            "line.unit_price",
+            "line.direct_cost",
+        ],
+        "optional_for_proposal_record": [
+            "discount_amount",
+            "validity_date",
+            "payment_terms",
+            "scope_summary",
+            "notes",
+        ],
+        "system_derived_do_not_ask_user": [
+            "opportunity_id",
+            "sales_account_id",
+            "vat_status",
+            "vat_rate_for_commercial_proposal",
+        ],
+        "not_required_for_proposal_record": [
+            "billing_address",
+            "currency",
+            "salesperson_internal_number",
+            "existing_quote_reference",
+            "internal_approval_before_draft",
+        ],
+        "approval_rule": (
+            "Draft proposal record does not require approval. "
+            "Approval is required before external quotation use/activation."
+        ),
+        "read_only_query_requires_approval": False,
+        "artifact_generation": {
+            "financial_proposal_docx": False,
+            "financial_proposal_pdf": False,
+        },
+    }
+
 async def _ceo_exec_single_open_opportunity(db: AsyncSession, account_id):
     rows = (
         await db.execute(
@@ -78634,6 +78827,23 @@ async def _ceo_exec_action(
             **base,
             "status": "read_only",
             "evidence": await _ceo_exec_client_state(db, client_name),
+        }
+
+    if action_type == "get_proposal_readiness":
+        if not client_name:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Client name is required.",
+            }
+
+        return {
+            **base,
+            "status": "read_only",
+            "evidence": await _ceo_exec_proposal_readiness(
+                db,
+                client_name,
+            ),
         }
 
     if action_type == "create_sales_account":
@@ -79101,9 +79311,14 @@ async def _ceo_execution_layer(
         + ". "
         "Only create a Sales account/opportunity if the user explicitly "
         "asks to create/register/add a client/project/opportunity. "
-        "If the user asks for a proposal for a client missing from Sales, "
-        "do not auto-create it; use get_client_state and report the block. "
-        "For create_commercial_proposal include exact line description, "
+        "If the user asks to prepare or assess a financial/commercial "
+        "proposal, use get_proposal_readiness first unless all required "
+        "proposal line facts are explicitly present in USER SOURCE. "
+        "Proposal readiness is deterministic and defines the exact fields "
+        "required by the live API contract. Never replace it with a generic "
+        "commercial checklist. If the client is missing from Sales, do not "
+        "auto-create it. Read-only proposal readiness never needs user "
+        "approval. For create_commercial_proposal include exact line description, "
         "quantity, unit_price and direct_cost. Missing direct cost must "
         "remain missing and the executor will block. "
         "Use get_finance_status for finance/billing status, "

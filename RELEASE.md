@@ -132,3 +132,17 @@ Tag: `v1.0.0`
 - Sales Leads and Opportunities remain included when their owner/relationship owner matches the named person.
 - Prevents the current accountability lookup request from appearing as historical work for the person being queried.
 - No business records are created, changed, or deleted by this release.
+
+## v1.3.3 Proposal Readiness Fix
+
+- Adds deterministic `get_proposal_readiness` based on the live Sales/Commercial Finance contract.
+- Proposal readiness reports actual stored Account and Opportunity identifiers and never asks the user for IDs already in the system.
+- Exact required inputs for an internal proposal record are line description, quantity, unit price, and direct cost.
+- Discount, validity date, payment terms, scope summary, and notes are optional for the proposal record.
+- VAT status and proposal VAT rate are system-derived.
+- Billing address, currency, salesperson internal number, existing quote reference, and pre-draft approval are not required to create the internal proposal record.
+- Read-only proposal readiness requires no user approval.
+- When the Execution Engine handles a request, the legacy CEO orchestrator is bypassed to prevent duplicate/generic output from overriding execution evidence.
+- Artifact capability flags are not treated as proof that a document exists.
+- Financial Proposal DOCX/PDF generation remains unavailable.
+- No business records are created, changed, or deleted by this release.
