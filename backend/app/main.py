@@ -1917,6 +1917,7 @@ async def chat_with_agent(
 
     # CEO ORCHESTRATION HOOK v1.1.1
     ceo_orchestration = None
+    ceo_execution = None
     ceo_attachment_context = ""
 
     if agent.slug == "ceo":
@@ -1948,6 +1949,38 @@ async def chat_with_agent(
                     orchestration_input
                     + "\n\n"
                     + ceo_attachment_context
+                )
+
+            # CEO EXECUTION ENGINE HOOK v1.3.0
+            ceo_execution = await _ceo_execution_layer(
+                db,
+                orchestration_input,
+                conversation.id,
+            )
+
+            if ceo_execution:
+                execution_json = json.dumps(
+                    ceo_execution,
+                    ensure_ascii=False,
+                    default=str,
+                )
+                effective_instructions = (
+                    effective_instructions
+                    + "\n\nAUTHORITATIVE CEO EXECUTION EVIDENCE:\n"
+                    + execution_json
+                    + "\nExecution evidence is authoritative. "
+                      "Specialist prose is advisory only. "
+                      "Say completed only when status is executed "
+                      "and real record evidence exists. "
+                      "For blocked, state the exact missing input. "
+                      "For read_only, report the live system state. "
+                      "Never invent defaults or promise proposal "
+                      "DOCX/PDF while artifact_generation is false."
+                )
+                orchestration_input = (
+                    orchestration_input
+                    + "\n\nAUTHORITATIVE SYSTEM EXECUTION EVIDENCE:\n"
+                    + execution_json
                 )
 
             ceo_orchestration = await _ceo_orchestrate_request(
@@ -77073,7 +77106,13 @@ async def _ceo_orchestrate_request(
                     "Never claim external communication, invoice sending, "
                     "payment, accounting posting, bank transfer, deployment, "
                     "approval or filing occurred unless system evidence "
-                    "explicitly proves it."
+                    "explicitly proves it. Your response is advisory analysis/review, "
+                    "not proof of execution. Do not invent ERP, SharePoint, email, "
+                    "phone, storage locations, document links, invoice numbers, "
+                    "prices, costs, VAT status, recipients, deadlines or future work. "
+                    "Do not promise later work or time estimates. If authoritative "
+                    "data is missing, identify the missing field instead of proposing "
+                    "default commercial values."
                 )
             )
 
@@ -78065,4 +78104,1096 @@ async def ceo_office_status(
             datetime.now(
                 timezone.utc
             ).isoformat(),
+    }
+
+# ============================================================
+# ENCLAVE v1.3.0 - CEO EXECUTION ENGINE
+# ============================================================
+
+_CEO_EXEC_ACTIONS = {
+    "get_client_state",
+    "get_finance_status",
+    "get_daily_report",
+    "get_accountability",
+    "create_sales_account",
+    "create_sales_opportunity",
+    "create_business_work_item",
+    "prepare_due_invoices",
+    "create_commercial_proposal",
+}
+
+
+def _ceo_exec_json_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    try:
+        return float(value)
+    except Exception:
+        return str(value)
+
+
+def _ceo_exec_row(row):
+    if row is None:
+        return None
+    return {
+        key: _ceo_exec_json_value(value)
+        for key, value in dict(row).items()
+    }
+
+
+def _ceo_exec_number_in_source(value, source_text):
+    if value is None:
+        return False
+    try:
+        number = float(value)
+    except Exception:
+        return False
+
+    source = str(source_text or "")
+    compact = source.replace(",", "").replace(" ", "")
+
+    forms = {
+        str(value),
+        f"{number:.2f}",
+        f"{number:,.2f}",
+    }
+
+    if number.is_integer():
+        integer = int(number)
+        forms.add(str(integer))
+        forms.add(f"{integer:,}")
+
+    return any(
+        form in source
+        or form.replace(",", "").replace(" ", "") in compact
+        for form in forms
+    )
+
+
+def _ceo_exec_text_in_source(value, source_text):
+    value = str(value or "").strip()
+    if not value:
+        return False
+    return value.casefold() in str(source_text or "").casefold()
+
+
+async def _ceo_exec_snapshot(db: AsyncSession):
+    company = (
+        await db.execute(
+            text(
+                """
+                SELECT to_jsonb(x)
+                FROM company_profiles x
+                WHERE profile_key='primary'
+                LIMIT 1
+                """
+            )
+        )
+    ).scalar() or {}
+
+    bank_count = int(
+        (
+            await db.execute(
+                text("SELECT count(*) FROM finance_bank_accounts")
+            )
+        ).scalar()
+        or 0
+    )
+
+    accounts = (
+        await db.execute(
+            text(
+                """
+                SELECT id, code, name, status, account_type
+                FROM sales_accounts
+                ORDER BY updated_at DESC
+                LIMIT 100
+                """
+            )
+        )
+    ).mappings().all()
+
+    opportunities = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    o.id, o.code, o.name, o.account_id,
+                    a.name AS account_name,
+                    o.status, o.stage,
+                    o.net_revenue_ex_vat,
+                    o.gross_profit,
+                    o.gross_margin_pct
+                FROM sales_opportunities o
+                JOIN sales_accounts a ON a.id=o.account_id
+                ORDER BY o.updated_at DESC
+                LIMIT 100
+                """
+            )
+        )
+    ).mappings().all()
+
+    quotations = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    q.id, q.opportunity_id,
+                    a.name AS account_name,
+                    o.name AS opportunity_name,
+                    q.version, q.status,
+                    q.net_revenue_ex_vat,
+                    q.direct_cost,
+                    q.gross_margin_pct,
+                    q.vat_rate_pct,
+                    q.validity_date,
+                    q.approval_id
+                FROM sales_quotations q
+                JOIN sales_opportunities o ON o.id=q.opportunity_id
+                JOIN sales_accounts a ON a.id=o.account_id
+                ORDER BY q.updated_at DESC
+                LIMIT 100
+                """
+            )
+        )
+    ).mappings().all()
+
+    invoices = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    id, invoice_number, customer_name,
+                    issue_date, due_date,
+                    subtotal, vat_rate_pct, vat_amount,
+                    total_amount, collected_amount,
+                    status, approval_id
+                FROM commercial_invoices
+                ORDER BY created_at DESC
+                LIMIT 100
+                """
+            )
+        )
+    ).mappings().all()
+
+    return {
+        "company": company,
+        "finance_bank_account_count": bank_count,
+        "sales_accounts": [_ceo_exec_row(x) for x in accounts],
+        "sales_opportunities": [_ceo_exec_row(x) for x in opportunities],
+        "sales_quotations": [_ceo_exec_row(x) for x in quotations],
+        "commercial_invoices": [_ceo_exec_row(x) for x in invoices],
+        "artifact_generation": {
+            "financial_proposal_docx": False,
+            "financial_proposal_pdf": False,
+            "invoice_print_page": True,
+        },
+        "safety": {
+            "external_send": False,
+            "accounting_posting": False,
+            "bank_transfer": False,
+            "automatic_finance_customer_creation": False,
+        },
+    }
+
+
+async def _ceo_exec_find_account(db: AsyncSession, client_name: str):
+    name = str(client_name or "").strip()
+    if not name:
+        return None
+
+    exact = (
+        await db.execute(
+            text(
+                """
+                SELECT id, code, name, status, account_type
+                FROM sales_accounts
+                WHERE lower(name)=lower(:name)
+                ORDER BY updated_at DESC
+                LIMIT 2
+                """
+            ),
+            {"name": name},
+        )
+    ).mappings().all()
+
+    if len(exact) == 1:
+        return exact[0]
+
+    partial = (
+        await db.execute(
+            text(
+                """
+                SELECT id, code, name, status, account_type
+                FROM sales_accounts
+                WHERE name ILIKE :pattern
+                ORDER BY updated_at DESC
+                LIMIT 3
+                """
+            ),
+            {"pattern": f"%{name}%"},
+        )
+    ).mappings().all()
+
+    if len(partial) == 1:
+        return partial[0]
+
+    return None
+
+
+async def _ceo_exec_client_state(db: AsyncSession, client_name: str):
+    account = await _ceo_exec_find_account(db, client_name)
+
+    if account is None:
+        return {
+            "client_name": client_name,
+            "account_found": False,
+            "account": None,
+            "opportunities": [],
+            "quotations": [],
+            "billing_schedule": [],
+            "invoices": [],
+        }
+
+    account_id = account["id"]
+
+    opportunities = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    id, code, name, status, stage,
+                    net_revenue_ex_vat,
+                    gross_profit, gross_margin_pct,
+                    next_step, next_step_date
+                FROM sales_opportunities
+                WHERE account_id=:account_id
+                ORDER BY updated_at DESC
+                """
+            ),
+            {"account_id": account_id},
+        )
+    ).mappings().all()
+
+    quotations = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    q.id, q.opportunity_id,
+                    q.version, q.status,
+                    q.subtotal_ex_vat,
+                    q.discount_amount,
+                    q.net_revenue_ex_vat,
+                    q.direct_cost,
+                    q.gross_margin_pct,
+                    q.vat_rate_pct,
+                    q.total_inc_vat,
+                    q.validity_date,
+                    q.payment_terms,
+                    q.approval_id
+                FROM sales_quotations q
+                JOIN sales_opportunities o ON o.id=q.opportunity_id
+                WHERE o.account_id=:account_id
+                ORDER BY q.updated_at DESC
+                """
+            ),
+            {"account_id": account_id},
+        )
+    ).mappings().all()
+
+    billing = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    b.id, b.opportunity_id, b.quotation_id,
+                    b.label, b.issue_date, b.due_date,
+                    b.amount_ex_vat, b.status, b.invoice_id
+                FROM commercial_billing_schedule b
+                JOIN sales_opportunities o ON o.id=b.opportunity_id
+                WHERE o.account_id=:account_id
+                ORDER BY b.created_at DESC
+                """
+            ),
+            {"account_id": account_id},
+        )
+    ).mappings().all()
+
+    invoices = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    ci.id, ci.invoice_number,
+                    ci.issue_date, ci.due_date,
+                    ci.subtotal, ci.vat_rate_pct,
+                    ci.vat_amount, ci.total_amount,
+                    ci.collected_amount, ci.status,
+                    ci.approval_id
+                FROM commercial_invoices ci
+                JOIN sales_opportunities o ON o.id=ci.opportunity_id
+                WHERE o.account_id=:account_id
+                ORDER BY ci.created_at DESC
+                """
+            ),
+            {"account_id": account_id},
+        )
+    ).mappings().all()
+
+    return {
+        "client_name": client_name,
+        "account_found": True,
+        "account": _ceo_exec_row(account),
+        "opportunities": [_ceo_exec_row(x) for x in opportunities],
+        "quotations": [_ceo_exec_row(x) for x in quotations],
+        "billing_schedule": [_ceo_exec_row(x) for x in billing],
+        "invoices": [_ceo_exec_row(x) for x in invoices],
+    }
+
+
+async def _ceo_exec_single_open_opportunity(db: AsyncSession, account_id):
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT id, code, name, status, stage
+                FROM sales_opportunities
+                WHERE account_id=:account_id
+                  AND status='open'
+                ORDER BY updated_at DESC
+                LIMIT 3
+                """
+            ),
+            {"account_id": account_id},
+        )
+    ).mappings().all()
+
+    if len(rows) == 1:
+        return rows[0], None
+
+    if len(rows) == 0:
+        return None, "No open Sales opportunity exists for this client."
+
+    return None, (
+        "Multiple open Sales opportunities exist for this client; "
+        "a specific opportunity is required."
+    )
+
+
+def _ceo_exec_account_type():
+    allowed = set(globals().get("_SALES_ACCOUNT_TYPES", set()) or set())
+    if "prospect" in allowed:
+        return "prospect"
+    if "customer" in allowed:
+        return "customer"
+    return None
+
+
+async def _ceo_exec_action(
+    db: AsyncSession,
+    action: dict,
+    client_name: str | None,
+    source_text: str,
+):
+    action_type = str(action.get("type", "")).strip()
+    data = action.get("data") or {}
+
+    base = {
+        "type": action_type,
+        "agent_slug": str(action.get("agent_slug", "ceo")).strip().lower(),
+        "title": str(action.get("title", action_type)).strip()[:255],
+    }
+
+    if action_type not in _CEO_EXEC_ACTIONS:
+        return {
+            **base,
+            "status": "blocked",
+            "reason": "Action is not allowed by v1.3.0.",
+        }
+
+    if action_type == "get_finance_status":
+        return {
+            **base,
+            "status": "read_only",
+            "evidence": await commercial_finance_dashboard(db),
+        }
+
+    if action_type == "get_daily_report":
+        return {
+            **base,
+            "status": "read_only",
+            "evidence": await _cf_daily_report(db),
+        }
+
+    if action_type == "get_accountability":
+        person = str(data.get("person", "")).strip()
+
+        if not person:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Accountable person is required.",
+            }
+
+        if not _ceo_exec_text_in_source(person, source_text):
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Accountable person is not evidenced in the request.",
+            }
+
+        days = max(1, min(int(data.get("days", 30) or 30), 365))
+
+        return {
+            **base,
+            "status": "read_only",
+            "evidence": await business_accountability_report(
+                person,
+                days,
+                db,
+            ),
+        }
+
+    if action_type == "get_client_state":
+        if not client_name:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Client name is required.",
+            }
+
+        return {
+            **base,
+            "status": "read_only",
+            "evidence": await _ceo_exec_client_state(db, client_name),
+        }
+
+    if action_type == "create_sales_account":
+        if not client_name:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Client name is required.",
+            }
+
+        if not _ceo_exec_text_in_source(client_name, source_text):
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Client name is not evidenced in the request.",
+            }
+
+        existing = await _ceo_exec_find_account(db, client_name)
+
+        if existing is not None:
+            return {
+                **base,
+                "status": "executed",
+                "operation": "existing_record_reused",
+                "record_type": "sales_account",
+                "record": _ceo_exec_row(existing),
+            }
+
+        account_type = _ceo_exec_account_type()
+
+        if not account_type:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "No safe Sales account type default is available.",
+            }
+
+        candidate = {
+            "name": client_name,
+            "account_type": account_type,
+            "source": "ceo_execution_engine",
+            "notes": (
+                "Created by CEO Execution Engine v1.3.0. "
+                "No external communication performed."
+            ),
+        }
+
+        fields = SalesAccountCreateRequest.model_fields
+        filtered = {
+            key: value
+            for key, value in candidate.items()
+            if key in fields
+        }
+
+        missing = [
+            name
+            for name, field in fields.items()
+            if field.is_required() and name not in filtered
+        ]
+
+        if missing:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": (
+                    "Sales account requires missing fields: "
+                    + ", ".join(missing)
+                ),
+            }
+
+        created = await create_sales_account(
+            SalesAccountCreateRequest(**filtered),
+            db,
+        )
+
+        return {
+            **base,
+            "status": "executed",
+            "operation": "sales_account_created",
+            "record_type": "sales_account",
+            "record": created,
+        }
+
+    if action_type == "create_sales_opportunity":
+        if not client_name:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Client name is required.",
+            }
+
+        account = await _ceo_exec_find_account(db, client_name)
+
+        if account is None:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Sales account does not exist. Register the client first.",
+            }
+
+        existing, reason = await _ceo_exec_single_open_opportunity(
+            db,
+            account["id"],
+        )
+
+        if existing is not None:
+            return {
+                **base,
+                "status": "executed",
+                "operation": "existing_record_reused",
+                "record_type": "sales_opportunity",
+                "record": _ceo_exec_row(existing),
+            }
+
+        if reason and reason.startswith("Multiple"):
+            return {
+                **base,
+                "status": "blocked",
+                "reason": reason,
+            }
+
+        total = data.get("total_contract_value_ex_vat", 0) or 0
+        period = data.get("period_value_ex_vat", 0) or 0
+
+        if float(total) > 0 and not _ceo_exec_number_in_source(total, source_text):
+            total = 0
+
+        if float(period) > 0 and not _ceo_exec_number_in_source(period, source_text):
+            period = 0
+
+        candidate = {
+            "account_id": account["id"],
+            "name": (
+                str(data.get("opportunity_name", "")).strip()
+                or f"{client_name} Commercial Opportunity"
+            ),
+            "opportunity_type": "new_business",
+            "forecast_category": "pipeline",
+            "total_contract_value_ex_vat": float(total),
+            "period_value_ex_vat": float(period),
+            "discount_amount": 0,
+            "direct_cost_estimate": 0,
+            "scope_summary": (
+                str(data.get("scope_summary", "")).strip()
+                or None
+            ),
+            "next_step": (
+                "Complete authoritative commercial inputs before quotation."
+            ),
+        }
+
+        fields = SalesOpportunityCreateRequest.model_fields
+        filtered = {
+            key: value
+            for key, value in candidate.items()
+            if key in fields
+        }
+
+        missing = [
+            name
+            for name, field in fields.items()
+            if field.is_required() and name not in filtered
+        ]
+
+        if missing:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": (
+                    "Sales opportunity requires missing fields: "
+                    + ", ".join(missing)
+                ),
+            }
+
+        created = await create_sales_opportunity(
+            SalesOpportunityCreateRequest(**filtered),
+            db,
+        )
+
+        return {
+            **base,
+            "status": "executed",
+            "operation": "sales_opportunity_created",
+            "record_type": "sales_opportunity",
+            "record": created,
+            "note": "Unknown commercial values remain zero; no values were invented.",
+        }
+
+    if action_type == "create_business_work_item":
+        person = str(data.get("accountable_person", "")).strip()
+
+        if not person:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Accountable person is required.",
+            }
+
+        if not _ceo_exec_text_in_source(person, source_text):
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Accountable person is not evidenced in the request.",
+            }
+
+        role = str(data.get("accountable_role", "") or "").strip()
+
+        if not role and person.casefold() in _cf_person_aliases("فهد العنزي"):
+            role = "External Commercial Contributor"
+
+        priority = str(data.get("priority", "normal")).strip().lower()
+        if priority not in _CF_PRIORITIES:
+            priority = "normal"
+
+        payload = BusinessWorkItemCreateRequest(
+            title=(
+                str(data.get("title", "")).strip()
+                or base["title"]
+                or "CEO Work Item"
+            ),
+            description=(
+                str(data.get("description", "")).strip()
+                or None
+            ),
+            accountable_person=person,
+            accountable_role=role or None,
+            agent_slug=(
+                str(action.get("agent_slug", "sales")).strip().lower()
+                or "sales"
+            ),
+            priority=priority,
+            due_at=None,
+        )
+
+        created = await create_business_work_item(payload, db)
+
+        return {
+            **base,
+            "status": "executed",
+            "operation": "business_work_item_created",
+            "record": created,
+            "accountable_person": person,
+            "accountable_role": role or None,
+        }
+
+    if action_type == "prepare_due_invoices":
+        result = await _cf_prepare_due_invoices(db)
+        await db.commit()
+
+        return {
+            **base,
+            "status": (
+                "waiting_approval"
+                if result.get("created")
+                else "executed"
+            ),
+            "operation": "due_invoice_drafts_prepared",
+            "record": result,
+            "external_send": False,
+            "accounting_posting": False,
+            "bank_transfer": False,
+        }
+
+    if action_type == "create_commercial_proposal":
+        if not client_name:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Client name is required.",
+            }
+
+        account = await _ceo_exec_find_account(db, client_name)
+
+        if account is None:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Client is not registered in Sales.",
+            }
+
+        opportunity, reason = await _ceo_exec_single_open_opportunity(
+            db,
+            account["id"],
+        )
+
+        if opportunity is None:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": reason,
+            }
+
+        raw_lines = data.get("lines") or []
+
+        if not raw_lines:
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "No authoritative quotation lines were supplied.",
+            }
+
+        lines = []
+
+        for index, item in enumerate(raw_lines, start=1):
+            description = str(item.get("description", "")).strip()
+            quantity = item.get("quantity")
+            unit_price = item.get("unit_price")
+            direct_cost = item.get("direct_cost")
+
+            if not description:
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": f"Quotation line {index} description is missing.",
+                }
+
+            if quantity is None or unit_price is None or direct_cost is None:
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": (
+                        f"Quotation line {index} requires quantity, "
+                        "unit price and direct cost. "
+                        "The system will not invent missing commercial values."
+                    ),
+                }
+
+            if not _ceo_exec_number_in_source(quantity, source_text):
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": f"Quotation line {index} quantity is not evidenced.",
+                }
+
+            if not _ceo_exec_number_in_source(unit_price, source_text):
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": f"Quotation line {index} unit price is not evidenced.",
+                }
+
+            if float(direct_cost) == 0:
+                explicit_zero = any(
+                    marker in source_text.casefold()
+                    for marker in (
+                        "direct cost 0",
+                        "cost 0",
+                        "تكلفة 0",
+                        "التكلفة 0",
+                    )
+                )
+                if not explicit_zero:
+                    return {
+                        **base,
+                        "status": "blocked",
+                        "reason": (
+                            f"Quotation line {index} direct cost is unknown. "
+                            "Zero cost cannot be assumed because it would fake margin."
+                        ),
+                    }
+            elif not _ceo_exec_number_in_source(direct_cost, source_text):
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": f"Quotation line {index} direct cost is not evidenced.",
+                }
+
+            lines.append(
+                CommercialProposalLineRequest(
+                    description=description,
+                    quantity=float(quantity),
+                    unit_price=float(unit_price),
+                    direct_cost=float(direct_cost),
+                    notes=(
+                        str(item.get("notes", "")).strip()
+                        or None
+                    ),
+                )
+            )
+
+        discount = float(data.get("discount_amount", 0) or 0)
+
+        if discount > 0 and not _ceo_exec_number_in_source(discount, source_text):
+            return {
+                **base,
+                "status": "blocked",
+                "reason": "Discount amount is not evidenced.",
+            }
+
+        created = await create_commercial_finance_proposal(
+            CommercialProposalCreateRequest(
+                opportunity_id=opportunity["id"],
+                discount_amount=discount,
+                validity_date=None,
+                payment_terms=(
+                    str(data.get("payment_terms", "")).strip()
+                    or None
+                ),
+                scope_summary=(
+                    str(data.get("scope_summary", "")).strip()
+                    or None
+                ),
+                notes=(
+                    "Created by CEO Execution Engine v1.3.0. "
+                    "External send was not performed."
+                ),
+                lines=lines,
+            ),
+            db,
+        )
+
+        return {
+            **base,
+            "status": "executed",
+            "operation": "commercial_proposal_created",
+            "record_type": "sales_quotation",
+            "record": created,
+            "external_send": False,
+        }
+
+    return {
+        **base,
+        "status": "blocked",
+        "reason": "Unsupported action.",
+    }
+
+
+async def _ceo_execution_layer(
+    db: AsyncSession,
+    source_text: str,
+    conversation_id,
+):
+    source_text = str(source_text or "").strip()
+
+    if not source_text:
+        return None
+
+    snapshot = await _ceo_exec_snapshot(db)
+
+    planner_context = {
+        "company": snapshot["company"],
+        "finance_bank_account_count": snapshot["finance_bank_account_count"],
+        "sales_accounts": snapshot["sales_accounts"],
+        "sales_opportunities": snapshot["sales_opportunities"],
+        "sales_quotations": snapshot["sales_quotations"],
+        "commercial_invoices": snapshot["commercial_invoices"],
+        "artifact_generation": snapshot["artifact_generation"],
+        "safety": snapshot["safety"],
+    }
+
+    instructions = (
+        "You are the strict execution planner for Enclave CEO. "
+        "Return JSON only. Decide which REAL INTERNAL SYSTEM actions "
+        "should run now. Never invent client records, prices, quantities, "
+        "direct costs, discounts, dates, VAT status, bank accounts, "
+        "invoice numbers, files, recipients, external systems or facts. "
+        "The LIVE SYSTEM SNAPSHOT is authoritative. "
+        "The USER SOURCE is the only source for new business facts. "
+        "No illustrative/default commercial numbers. "
+        "Financial Proposal DOCX/PDF generation is NOT available in v1.3.0. "
+        "No external sending, accounting posting, payment, bank transfer "
+        "or automatic Finance customer creation. "
+        "Allowed actions: "
+        + ", ".join(sorted(_CEO_EXEC_ACTIONS))
+        + ". "
+        "Only create a Sales account/opportunity if the user explicitly "
+        "asks to create/register/add a client/project/opportunity. "
+        "If the user asks for a proposal for a client missing from Sales, "
+        "do not auto-create it; use get_client_state and report the block. "
+        "For create_commercial_proposal include exact line description, "
+        "quantity, unit_price and direct_cost. Missing direct cost must "
+        "remain missing and the executor will block. "
+        "Use get_finance_status for finance/billing status, "
+        "get_accountability for named-person status, get_daily_report "
+        "for daily report, get_client_state for named-client status, "
+        "prepare_due_invoices only when the user explicitly asks to "
+        "prepare due invoice drafts, and create_business_work_item only "
+        "when the user explicitly assigns/follows up work to a named person. "
+        "Schema: {\"handled\":boolean,\"title\":string,"
+        "\"client_name_exact\":string|null,\"blocked_reason\":string|null,"
+        "\"actions\":[{\"type\":string,\"agent_slug\":string,"
+        "\"title\":string,\"data\":object}]}. "
+        "client_name_exact must be copied verbatim from USER SOURCE. "
+        "If the request is only casual/general advice, handled=false."
+    )
+
+    planner_input = (
+        "USER SOURCE:\n"
+        + source_text[:30000]
+        + "\n\nLIVE SYSTEM SNAPSHOT:\n"
+        + json.dumps(
+            planner_context,
+            ensure_ascii=False,
+            default=str,
+        )[:30000]
+    )
+
+    try:
+        response = await openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=instructions,
+            input=planner_input,
+            store=False,
+        )
+        plan = _cf_json(response.output_text)
+    except Exception as exc:
+        return {
+            "handled": False,
+            "planner_error": type(exc).__name__,
+            "artifact_generation": snapshot["artifact_generation"],
+        }
+
+    if not plan.get("handled"):
+        return {
+            "handled": False,
+            "artifact_generation": snapshot["artifact_generation"],
+        }
+
+    client_name = (
+        str(plan.get("client_name_exact", "") or "").strip()
+        or None
+    )
+
+    if client_name and not _ceo_exec_text_in_source(client_name, source_text):
+        client_name = None
+
+    results = []
+
+    for action in (plan.get("actions") or [])[:8]:
+        if not isinstance(action, dict):
+            continue
+
+        try:
+            result = await _ceo_exec_action(
+                db,
+                action,
+                client_name,
+                source_text,
+            )
+        except HTTPException as exc:
+            result = {
+                "type": str(action.get("type", "")),
+                "agent_slug": str(action.get("agent_slug", "ceo")),
+                "title": str(action.get("title", "")),
+                "status": "blocked",
+                "reason": (
+                    exc.detail
+                    if isinstance(exc.detail, str)
+                    else json.dumps(
+                        exc.detail,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                ),
+            }
+        except Exception as exc:
+            result = {
+                "type": str(action.get("type", "")),
+                "agent_slug": str(action.get("agent_slug", "ceo")),
+                "title": str(action.get("title", "")),
+                "status": "blocked",
+                "reason": "Execution error: " + type(exc).__name__,
+            }
+
+        results.append(result)
+
+    if not results and plan.get("blocked_reason"):
+        results.append(
+            {
+                "type": "no_system_action",
+                "agent_slug": "ceo",
+                "title": str(plan.get("title", "Execution blocked"))[:255],
+                "status": "blocked",
+                "reason": str(plan.get("blocked_reason"))[:4000],
+            }
+        )
+
+    evidence = {
+        "handled": True,
+        "title": str(plan.get("title", "CEO Execution"))[:255],
+        "client_name": client_name,
+        "summary": {
+            "executed": sum(x.get("status") == "executed" for x in results),
+            "waiting_approval": sum(
+                x.get("status") == "waiting_approval" for x in results
+            ),
+            "blocked": sum(x.get("status") == "blocked" for x in results),
+            "read_only": sum(x.get("status") == "read_only" for x in results),
+        },
+        "actions": results,
+        "artifact_generation": snapshot["artifact_generation"],
+        "safety": snapshot["safety"],
+        "rules": {
+            "execution_claim_requires_record_evidence": True,
+            "illustrative_commercial_numbers": False,
+        },
+    }
+
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="ceo.execution_engine.evaluated",
+        details={
+            "conversation_id": str(conversation_id) if conversation_id else None,
+            "client_name": client_name,
+            "summary": evidence["summary"],
+            "action_types": [x.get("type") for x in results],
+        },
+    )
+
+    await db.commit()
+
+    return evidence
+
+
+@app.get("/api/ceo/execution-capabilities")
+async def ceo_execution_capabilities(
+    db: AsyncSession = Depends(get_db),
+):
+    snapshot = await _ceo_exec_snapshot(db)
+
+    return {
+        "version": "1.3.0",
+        "mode": "evidence_first_execution",
+        "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
+        "artifact_generation": snapshot["artifact_generation"],
+        "safety": snapshot["safety"],
     }

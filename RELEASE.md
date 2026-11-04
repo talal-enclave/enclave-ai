@@ -99,3 +99,18 @@ Tag: `v1.0.0`
 - Daily operations signals are surfaced in the CEO screen.
 - CEO instructions explicitly prohibit redirecting the user to another agent or specialist workspace.
 - Existing Sales, Commercial Finance, Operations, Legal, HR, IT, Procurement, Marketing, Admin and Audit backends remain preserved.
+
+## v1.3.0 CEO Execution Engine
+
+- Adds evidence-first execution to the CEO-only command center.
+- Specialist prose is advisory only and is not proof that a system action happened.
+- Real internal execution is supported for guarded Sales, Commercial Finance and Operations actions.
+- The CEO can read client state, Finance status, daily reports and accountability from live records.
+- Explicit client/project registration can create real Sales Account and Opportunity records.
+- Business work items can be created for named accountable people such as external commercial contributors.
+- Due commercial invoice drafts can be prepared through the existing approval-gated Commercial Finance workflow.
+- Commercial proposal creation is blocked if quantity, unit price or direct cost is missing or not evidenced.
+- No default/illustrative prices, costs, discounts, VAT, invoice numbers or dates may be used as business facts.
+- Positive VAT remains governed by verified Company Profile registration.
+- External send, accounting posting, payments, bank transfers and automatic Finance customer creation remain disabled.
+- Financial Proposal DOCX/PDF generation remains unavailable in v1.3.0 and may not be promised.
