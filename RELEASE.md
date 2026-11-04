@@ -124,3 +124,11 @@ Tag: `v1.0.0`
 - Prevents duplicate presentation of the same authoritative system report.
 - Prevents the CEO from redirecting Fahad accountability into HR.
 - No business records are created, changed or deleted by this release.
+
+## v1.3.2 Accountability Evidence Fix
+
+- Excludes CEO orchestration/delegation tasks from named-person accountability evidence.
+- Only explicit `business_work_item` tasks count as work items assigned to an accountable person.
+- Sales Leads and Opportunities remain included when their owner/relationship owner matches the named person.
+- Prevents the current accountability lookup request from appearing as historical work for the person being queried.
+- No business records are created, changed, or deleted by this release.

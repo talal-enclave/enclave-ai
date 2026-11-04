@@ -1982,6 +1982,9 @@ async def chat_with_agent(
                       "accountability records. He is an external commercial "
                       "contributor, not an HR employee. Do not redirect his "
                       "accountability into HR."
+                      "Do not count CEO orchestration/delegation tasks "
+                      "or the current lookup request itself as evidence "
+                      "of work assigned to the named person."
                 )
                 orchestration_input = (
                     orchestration_input
@@ -77412,8 +77415,15 @@ async def business_accountability_report(
 
     work_items = []
 
+    # ENCLAVE v1.3.2 - ACCOUNTABILITY EVIDENCE FILTER
+    # Only explicit operational business work items count as
+    # accountable-person work. CEO delegation/planning tasks
+    # must never become self-referential accountability evidence.
     for row in tasks:
         payload = row.payload or {}
+
+        if payload.get("kind") != "business_work_item":
+            continue
 
         accountable = str(
             payload.get(
