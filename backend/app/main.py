@@ -1991,7 +1991,14 @@ async def chat_with_agent(
                       "status that are already in system_known. Read-only "
                       "system queries do not require approval. Treat "
                       "artifact_generation true/false as capability flags, "
-                      "not as proof that a document exists."
+                      "not as proof that a document exists. When proposal "
+                      "readiness is blocked by missing line fields, ask only "
+                      "for those exact fields or for a source attachment that "
+                      "contains them. State that these are Quotation Line "
+                      "inputs, not Opportunity fields. Do not present A/B "
+                      "workflow choices, do not ask permission for read-only "
+                      "lookup, and do not claim Sales/Finance notifications "
+                      "were sent unless a real supported action proves it."
                 )
                 orchestration_input = (
                     orchestration_input
@@ -78674,6 +78681,8 @@ async def _ceo_exec_proposal_readiness(
             "line.unit_price",
             "line.direct_cost",
         ],
+        "proposal_input_target": "sales_quotation_lines",
+        "draft_creation_requires_approval": False,
         "optional_for_proposal_record": [
             "discount_amount",
             "validity_date",
@@ -79160,6 +79169,19 @@ async def _ceo_exec_action(
                     "reason": f"Quotation line {index} description is missing.",
                 }
 
+            if not _ceo_exec_text_in_source(
+                description,
+                source_text,
+            ):
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": (
+                        f"Quotation line {index} description is not "
+                        "evidenced in the user request or attached source."
+                    ),
+                }
+
             if quantity is None or unit_price is None or direct_cost is None:
                 return {
                     **base,
@@ -79233,21 +79255,53 @@ async def _ceo_exec_action(
                 "reason": "Discount amount is not evidenced.",
             }
 
+        payment_terms = (
+            str(
+                data.get(
+                    "payment_terms",
+                    "",
+                )
+            ).strip()
+            or None
+        )
+
+        if (
+            payment_terms
+            and not _ceo_exec_text_in_source(
+                payment_terms,
+                source_text,
+            )
+        ):
+            payment_terms = None
+
+        scope_summary = (
+            str(
+                data.get(
+                    "scope_summary",
+                    "",
+                )
+            ).strip()
+            or None
+        )
+
+        if (
+            scope_summary
+            and not _ceo_exec_text_in_source(
+                scope_summary,
+                source_text,
+            )
+        ):
+            scope_summary = None
+
         created = await create_commercial_finance_proposal(
             CommercialProposalCreateRequest(
                 opportunity_id=opportunity["id"],
                 discount_amount=discount,
                 validity_date=None,
-                payment_terms=(
-                    str(data.get("payment_terms", "")).strip()
-                    or None
-                ),
-                scope_summary=(
-                    str(data.get("scope_summary", "")).strip()
-                    or None
-                ),
+                payment_terms=payment_terms,
+                scope_summary=scope_summary,
                 notes=(
-                    "Created by CEO Execution Engine v1.3.0. "
+                    "Created by CEO Execution Engine v1.3.4. "
                     "External send was not performed."
                 ),
                 lines=lines,
@@ -79318,7 +79372,12 @@ async def _ceo_execution_layer(
         "required by the live API contract. Never replace it with a generic "
         "commercial checklist. If the client is missing from Sales, do not "
         "auto-create it. Read-only proposal readiness never needs user "
-        "approval. For create_commercial_proposal include exact line description, "
+        "approval. When readiness reports missing commercial inputs, do not "
+        "propose generic process options, notifications, work orders, or ask "
+        "permission to read the system. The missing fields belong to Sales "
+        "Quotation Lines, not the Opportunity. Ask the user only for the exact "
+        "missing fields, or ask them to attach a source document containing "
+        "those fields. For create_commercial_proposal include exact line description, "
         "quantity, unit_price and direct_cost. Missing direct cost must "
         "remain missing and the executor will block. "
         "Use get_finance_status for finance/billing status, "

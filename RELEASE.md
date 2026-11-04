@@ -146,3 +146,17 @@ Tag: `v1.0.0`
 - Artifact capability flags are not treated as proof that a document exists.
 - Financial Proposal DOCX/PDF generation remains unavailable.
 - No business records are created, changed, or deleted by this release.
+
+## v1.3.4 Final Execution UX Fix
+
+- Finalizes the v1.3 CEO execution UX for commercial proposal readiness and draft creation.
+- Proposal readiness now identifies missing commercial inputs as Sales Quotation Line fields, not Opportunity fields.
+- When proposal inputs are missing, the CEO asks only for the exact required fields or a source attachment containing them.
+- The CEO must not offer generic A/B process options, internal notification workflows, or ask permission for read-only lookup.
+- The CEO must not claim that Sales/Finance were notified unless a real supported system action exists.
+- Commercial proposal line descriptions must be evidenced in the user request or attached source material.
+- Optional payment terms and scope summary are used only when evidenced in source material; otherwise they are omitted.
+- Draft quotation creation remains an internal system action and does not require approval.
+- Approval is still required before external quotation use/activation.
+- Financial Proposal DOCX/PDF generation remains unavailable until the Artifact Engine release.
+- No business records are created, changed, or deleted by this release.
