@@ -1975,7 +1975,13 @@ async def chat_with_agent(
                       "For blocked, state the exact missing input. "
                       "For read_only, report the live system state. "
                       "Never invent defaults or promise proposal "
-                      "DOCX/PDF while artifact_generation is false."
+                      "DOCX/PDF while artifact_generation is false. "
+                      "Present authoritative execution evidence once only; "
+                      "do not repeat the same report in multiple sections. "
+                      "For Fahad Al-Anzi accountability use Operations/Sales "
+                      "accountability records. He is an external commercial "
+                      "contributor, not an HR employee. Do not redirect his "
+                      "accountability into HR."
                 )
                 orchestration_input = (
                     orchestration_input
@@ -78179,6 +78185,48 @@ def _ceo_exec_text_in_source(value, source_text):
     return value.casefold() in str(source_text or "").casefold()
 
 
+# ENCLAVE v1.3.1 - ACCOUNTABILITY RESOLUTION
+def _ceo_exec_resolve_accountable_person(
+    source_text: str,
+    proposed: str | None = None,
+):
+    source = str(source_text or "")
+    folded = source.casefold()
+
+    proposed = str(proposed or "").strip()
+
+    if proposed and proposed.casefold() in folded:
+        return proposed
+
+    fahad_name_ar = (
+        "\u0641\u0647\u062f "
+        "\u0627\u0644\u0639\u0646\u0632\u064a"
+    )
+
+    fahad_short_ar = (
+        "\u0641\u0647\u062f"
+    )
+
+    fahad_aliases = {
+        fahad_name_ar,
+        fahad_short_ar,
+        "fahad alenzi",
+        "fahad alanazi",
+        "fahad al enzi",
+        "fahad al-anazi",
+        "fahad alenazi",
+        "fahad",
+    }
+
+    if any(
+        alias.casefold() in folded
+        for alias in fahad_aliases
+    ):
+        return fahad_name_ar
+
+    return None
+
+
 async def _ceo_exec_snapshot(db: AsyncSession):
     company = (
         await db.execute(
@@ -78529,26 +78577,33 @@ async def _ceo_exec_action(
         }
 
     if action_type == "get_accountability":
-        person = str(data.get("person", "")).strip()
+        person = _ceo_exec_resolve_accountable_person(
+            source_text,
+            data.get("person"),
+        )
 
         if not person:
             return {
                 **base,
+                "agent_slug": "sales",
                 "status": "blocked",
-                "reason": "Accountable person is required.",
+                "reason": (
+                    "A named accountable person could not be "
+                    "resolved from the user request."
+                ),
             }
 
-        if not _ceo_exec_text_in_source(person, source_text):
-            return {
-                **base,
-                "status": "blocked",
-                "reason": "Accountable person is not evidenced in the request.",
-            }
-
-        days = max(1, min(int(data.get("days", 30) or 30), 365))
+        days = max(
+            1,
+            min(
+                int(data.get("days", 30) or 30),
+                365,
+            ),
+        )
 
         return {
             **base,
+            "agent_slug": "sales",
             "status": "read_only",
             "evidence": await business_accountability_report(
                 person,
@@ -79042,7 +79097,10 @@ async def _ceo_execution_layer(
         "quantity, unit_price and direct_cost. Missing direct cost must "
         "remain missing and the executor will block. "
         "Use get_finance_status for finance/billing status, "
-        "get_accountability for named-person status, get_daily_report "
+        "get_accountability for named-person status. When the named person "
+        "is Fahad Al-Anzi, treat him as an external commercial contributor "
+        "and use Operations/Sales accountability; never route him to HR. "
+        "Use get_daily_report "
         "for daily report, get_client_state for named-client status, "
         "prepare_due_invoices only when the user explicitly asks to "
         "prepare due invoice drafts, and create_business_work_item only "

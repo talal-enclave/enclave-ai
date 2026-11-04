@@ -114,3 +114,13 @@ Tag: `v1.0.0`
 - Positive VAT remains governed by verified Company Profile registration.
 - External send, accounting posting, payments, bank transfers and automatic Finance customer creation remain disabled.
 - Financial Proposal DOCX/PDF generation remains unavailable in v1.3.0 and may not be promised.
+
+## v1.3.1 CEO Execution Quality Fix
+
+- Fixes named-person accountability resolution for Fahad Al-Anzi even when the execution planner omits the person field.
+- Uses ASCII-safe Unicode source representation for Arabic name matching.
+- Keeps Fahad accountability evidence-based through Operations/Sales records; no HR employee record is required or created.
+- Normalizes accountability execution to the Sales/commercial office.
+- Prevents duplicate presentation of the same authoritative system report.
+- Prevents the CEO from redirecting Fahad accountability into HR.
+- No business records are created, changed or deleted by this release.
