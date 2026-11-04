@@ -86,3 +86,16 @@ Tag: `v1.0.0`
 - CEO orchestration receives the same attachment context for internal specialist work.
 - Scanned/image-only documents are stored but are treated as non-extractable rather than guessed.
 - Uploading files does not trigger external sending, payment, accounting posting, or other external execution.
+
+## v1.2.0 CEO-Only Command Center
+
+- User-facing operation is now CEO-only.
+- Specialist agents remain enabled in the backend but are no longer direct user entry points.
+- Department cards are read-only activity indicators.
+- Office cards glow while a department is working and use a separate waiting-for-approval state.
+- The UI lights likely departments immediately while the current CEO request is processing, then falls back to actual task/approval status.
+- Pending approvals are handled inside the CEO screen.
+- CEO chat attachments and conversation history remain available.
+- Daily operations signals are surfaced in the CEO screen.
+- CEO instructions explicitly prohibit redirecting the user to another agent or specialist workspace.
+- Existing Sales, Commercial Finance, Operations, Legal, HR, IT, Procurement, Marketing, Admin and Audit backends remain preserved.

@@ -1901,6 +1901,20 @@ async def chat_with_agent(
         }
     )
 
+    # CEO-ONLY EXECUTIVE INTERFACE v1.2.0
+    if agent.slug == "ceo":
+        effective_instructions = (
+            effective_instructions
+            + "\n\nCEO-ONLY USER INTERFACE RULES:\n"
+              "- You are the only agent the user directly interacts with.\n"
+              "- Never tell the user to go talk to another agent or open another agent workspace.\n"
+              "- Coordinate Finance, Sales, HR, Legal, IT, Procurement, Marketing, Admin and Audit internally.\n"
+              "- Return one consolidated executive result to the user.\n"
+              "- If user approval is required, ask for it clearly.\n"
+              "- Never claim a file, invoice, proposal, payment, message, filing or external action exists unless the system actually created or verified it.\n"
+              "- If the current tools cannot execute a requested action or generate a requested file, state that limitation rather than pretending completion.\n"
+        )
+
     # CEO ORCHESTRATION HOOK v1.1.1
     ceo_orchestration = None
     ceo_attachment_context = ""
@@ -77936,4 +77950,119 @@ async def bootstrap_ceo_file_conversation(
         "conversation_id": str(conversation.id),
         "agent_slug": "ceo",
         "title": conversation.title,
+    }
+
+# ============================================================
+# ENCLAVE v1.2.0 - CEO-ONLY OFFICE STATUS
+# ============================================================
+
+_CEO_OFFICES = {
+    "hr": ("الموارد البشرية", "HR"),
+    "finance": ("المالية", "FIN"),
+    "sales": ("المبيعات", "SLS"),
+    "procurement": ("المشتريات", "PR"),
+    "marketing": ("التسويق", "MKT"),
+    "admin": ("الشؤون الإدارية", "ADM"),
+    "legal": ("الشؤون القانونية", "LEG"),
+    "it": ("تقنية المعلومات", "IT"),
+    "audit": ("التدقيق والمخاطر", "AUD"),
+}
+
+
+@app.get("/api/ceo/office-status")
+async def ceo_office_status(
+    db: AsyncSession = Depends(get_db),
+):
+    task_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    a.slug AS agent_slug,
+                    COUNT(*) FILTER (
+                        WHERE t.status NOT IN (
+                            'completed',
+                            'cancelled'
+                        )
+                    ) AS open_tasks
+                FROM agents a
+                LEFT JOIN tasks t
+                    ON t.agent_id = a.id
+                WHERE a.slug IN (
+                    'hr','finance','sales',
+                    'procurement','marketing','admin',
+                    'legal','it','audit'
+                )
+                GROUP BY a.slug
+                """
+            )
+        )
+    ).mappings().all()
+
+    approval_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    a.slug AS agent_slug,
+                    COUNT(*) AS pending_approvals
+                FROM approvals p
+                JOIN agents a
+                    ON a.id = p.agent_id
+                WHERE p.status = 'pending'
+                  AND a.slug IN (
+                    'hr','finance','sales',
+                    'procurement','marketing','admin',
+                    'legal','it','audit'
+                  )
+                GROUP BY a.slug
+                """
+            )
+        )
+    ).mappings().all()
+
+    task_map = {
+        row["agent_slug"]:
+            int(row["open_tasks"] or 0)
+        for row in task_rows
+    }
+
+    approval_map = {
+        row["agent_slug"]:
+            int(row["pending_approvals"] or 0)
+        for row in approval_rows
+    }
+
+    offices = []
+
+    for slug, (name_ar, short) in _CEO_OFFICES.items():
+        open_tasks = task_map.get(slug, 0)
+        pending_approvals = approval_map.get(slug, 0)
+
+        if pending_approvals:
+            status = "waiting_approval"
+        elif open_tasks:
+            status = "active"
+        else:
+            status = "idle"
+
+        offices.append(
+            {
+                "slug": slug,
+                "name_ar": name_ar,
+                "short": short,
+                "status": status,
+                "open_tasks": open_tasks,
+                "pending_approvals":
+                    pending_approvals,
+            }
+        )
+
+    return {
+        "mode": "ceo_only",
+        "offices": offices,
+        "updated_at":
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
     }

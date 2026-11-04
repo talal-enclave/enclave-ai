@@ -1,298 +1,272 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import styles from "./page.module.css";
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
-const AGENTS = [
-  {
-    slug: "ceo",
-    name: "CEO",
-    ar: "الإدارة التنفيذية",
-    short: "CEO",
-    route: "/dashboard",
-    description: "الاستراتيجية، القرارات، الأولويات والتنسيق التنفيذي",
-    office: "مكتب القيادة والتحكم",
-  },
-  {
-    slug: "hr",
-    name: "HR",
-    ar: "الموارد البشرية",
-    short: "HR",
-    route: "/hr",
-    description: "إدارة المواهب، القوى العاملة، الأداء والسياسات",
-    office: "مكتب رأس المال البشري",
-  },
-  {
-    slug: "finance",
-    name: "Finance",
-    ar: "المالية",
-    short: "FIN",
-    route: "/finance",
-    description: "التخطيط المالي، الحسابات، التدفقات والتقارير",
-    office: "مكتب الإدارة المالية",
-  },
-  {
-    slug: "procurement",
-    name: "Procurement",
-    ar: "المشتريات",
-    short: "PR",
-    route: "/procurement",
-    description: "الموردون، المنافسات، أوامر الشراء والاستلام",
-    office: "مكتب سلسلة التوريد",
-  },
-  {
-    slug: "sales",
-    name: "Sales",
-    ar: "المبيعات",
-    short: "SLS",
-    route: "/sales",
-    description: "العملاء، الفرص، التسعير والتحصيل التجاري",
-    office: "مكتب النمو التجاري",
-  },
-  {
-    slug: "marketing",
-    name: "Marketing",
-    ar: "التسويق",
-    short: "MKT",
-    route: "/marketing",
-    description: "الحملات، المحتوى، الأداء والإسناد التسويقي",
-    office: "مكتب العلامة والنمو",
-  },
-  {
-    slug: "admin",
-    name: "Admin",
-    ar: "الشؤون الإدارية",
-    short: "ADM",
-    route: "/admin",
-    description: "المرافق، العهد، السجلات والخدمات الإدارية",
-    office: "مكتب العمليات الإدارية",
-  },
-  {
-    slug: "legal",
-    name: "Legal",
-    ar: "القانونية",
-    short: "LGL",
-    route: "/legal",
-    description: "العقود، الخصوصية، النزاهة والمسائل القانونية",
-    office: "مكتب الشؤون القانونية",
-  },
-  {
-    slug: "it",
-    name: "IT",
-    ar: "تقنية المعلومات",
-    short: "IT",
-    route: "/it",
-    description: "الخدمات التقنية، التغيير، الوصول والأمن التقني",
-    office: "مكتب التقنية والأمن",
-  },
-  {
-    slug: "audit",
-    name: "Audit",
-    ar: "التدقيق الداخلي",
-    short: "AUD",
-    route: "/audit",
-    description: "التدقيق، المخاطر، المتابعة والتحقق المستقل",
-    office: "مكتب المراجعة والحوكمة",
-  },
+const OFFICES = [
+  ["hr","الموارد البشرية","HR"],
+  ["finance","المالية","FIN"],
+  ["sales","المبيعات","SLS"],
+  ["procurement","المشتريات","PR"],
+  ["marketing","التسويق","MKT"],
+  ["admin","الشؤون الإدارية","ADM"],
+  ["legal","الشؤون القانونية","LEG"],
+  ["it","تقنية المعلومات","IT"],
+  ["audit","التدقيق والمخاطر","AUD"],
 ];
 
-function statusLabel(status) {
-  if (status === "completed") return "مكتملة";
-  if (status === "in_progress") return "قيد التنفيذ";
-  if (status === "cancelled") return "ملغاة";
-  return "معلقة";
+const KEYWORDS = {
+  finance: [
+    "مالية","مالي","المالية","فاتورة","فواتير",
+    "فوترة","تحصيل","دفعة","دفعات","عرض مالي",
+    "تسعير","سعر","invoice","billing","finance",
+    "payment","collection","pricing"
+  ],
+  sales: [
+    "مبيعات","عميل","عملاء","فرصة","فرص",
+    "عرض فني","عرض تجاري","proposal","sales",
+    "client","customer","opportunity","lead"
+  ],
+  hr: [
+    "موظف","موظفين","توظيف","موارد بشرية",
+    "راتب","رواتب","إجازة","اجازة","hr",
+    "employee","recruitment","payroll","leave"
+  ],
+  procurement: [
+    "مشتريات","شراء","مورد","موردين","توريد",
+    "procurement","supplier","purchase","vendor"
+  ],
+  marketing: [
+    "تسويق","حملة","محتوى","إعلان","اعلان",
+    "marketing","campaign","content"
+  ],
+  admin: [
+    "إداري","اداري","إدارية","ادارية",
+    "مرفق","مرافق","عنوان وطني","admin",
+    "facility","office"
+  ],
+  legal: [
+    "قانون","قانوني","عقد","عقود","nda",
+    "legal","contract","agreement"
+  ],
+  it: [
+    "تقنية","نظام","أنظمة","انظمة","it",
+    "system","technology","technical"
+  ],
+  audit: [
+    "تدقيق","مراجعة داخلية","مخاطر","حوكمة",
+    "audit","risk","governance"
+  ],
+};
+
+function asList(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.items)) return value.items;
+  if (Array.isArray(value?.rows)) return value.rows;
+  return [];
 }
 
-function priorityLabel(priority) {
-  if (priority === "critical") return "حرجة";
-  if (priority === "high") return "عالية";
-  if (priority === "low") return "منخفضة";
-  return "عادية";
+function inferOffices(text) {
+  const source = String(text || "").toLowerCase();
+
+  return Object.entries(KEYWORDS)
+    .filter(([, words]) =>
+      words.some((word) =>
+        source.includes(word.toLowerCase())
+      )
+    )
+    .map(([slug]) => slug);
+}
+
+function officeLabel(status) {
+  if (status === "waiting_approval") {
+    return "بانتظار اعتمادك";
+  }
+  if (status === "active") {
+    return "جارٍ التنفيذ";
+  }
+  return "متاح";
 }
 
 export default function Home() {
-  const [selected, setSelected] = useState("ceo");
   const [message, setMessage] = useState("");
-  const [conversationId, setConversationId] = useState(null);
+  const [conversationId, setConversationId] =
+    useState(null);
   const [messages, setMessages] = useState([]);
-  const [conversations, setConversations] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [tasks, setTasks] = useState([]);
-  const [tasksLoading, setTasksLoading] = useState(false);
-  const [approvals, setApprovals] = useState([]);
-  const [approvalsLoading, setApprovalsLoading] = useState(false);
-  // CEO CHAT ATTACHMENTS v1.1.1
-  const [pendingFiles, setPendingFiles] = useState([]);
-  const [ceoAttachments, setCeoAttachments] = useState([]);
-  const [uploadingFiles, setUploadingFiles] = useState(false);
-  const [agentRegistry, setAgentRegistry] = useState([]);
-  const [allTasks, setAllTasks] = useState([]);
-  const [overviewLoading, setOverviewLoading] = useState(true);
+  const [conversations, setConversations] =
+    useState([]);
+  const [pendingFiles, setPendingFiles] =
+    useState([]);
+  const [attachments, setAttachments] =
+    useState([]);
+  const [approvals, setApprovals] =
+    useState([]);
+  const [remoteOffices, setRemoteOffices] =
+    useState([]);
+  const [localBusy, setLocalBusy] =
+    useState([]);
+  const [dailyReport, setDailyReport] =
+    useState(null);
+  const [loading, setLoading] =
+    useState(false);
+  const [uploading, setUploading] =
+    useState(false);
+  const [error, setError] =
+    useState("");
 
-  const activeAgent =
-    AGENTS.find((agent) => agent.slug === selected) || AGENTS[0];
-
-  const registryBySlug = Object.fromEntries(
-    agentRegistry.map((agent) => [agent.slug, agent])
-  );
-
-  const enabledCount = AGENTS.filter(
-    (agent) => registryBySlug[agent.slug]?.enabled !== false
-  ).length;
-
-  const openTaskCount = allTasks.filter(
-    (task) => !["completed", "cancelled"].includes(task.status)
-  ).length;
-
-  async function loadOverview() {
-    setOverviewLoading(true);
-
-    try {
-      const [agentsRes, tasksRes] = await Promise.all([
-        fetch("/api/agents"),
-        fetch("/api/tasks"),
-      ]);
-
-      const agentsData = await agentsRes.json();
-      const tasksData = await tasksRes.json();
-
-      setAgentRegistry(agentsRes.ok && Array.isArray(agentsData) ? agentsData : []);
-      setAllTasks(tasksRes.ok && Array.isArray(tasksData) ? tasksData : []);
-    } catch {
-      setAgentRegistry([]);
-      setAllTasks([]);
-    } finally {
-      setOverviewLoading(false);
+  const officeMap = useMemo(() => {
+    const value = {};
+    for (const row of remoteOffices) {
+      value[row.slug] = row;
     }
-  }
+    return value;
+  }, [remoteOffices]);
 
-  async function loadConversations(slug) {
-    setHistoryLoading(true);
-
+  async function loadConversations() {
     try {
-      const res = await fetch(`/api/conversations/${slug}`);
+      const res = await fetch(
+        "/api/conversations/ceo"
+      );
       const data = await res.json();
-      setConversations(res.ok && Array.isArray(data) ? data : []);
+      if (res.ok) {
+        setConversations(asList(data));
+      }
     } catch {
       setConversations([]);
-    } finally {
-      setHistoryLoading(false);
-    }
-  }
-
-  async function loadTasks(slug) {
-    setTasksLoading(true);
-
-    try {
-      const res = await fetch(`/api/tasks?agent_slug=${slug}`);
-      const data = await res.json();
-      setTasks(res.ok && Array.isArray(data) ? data : []);
-    } catch {
-      setTasks([]);
-    } finally {
-      setTasksLoading(false);
     }
   }
 
   async function loadApprovals() {
-    setApprovalsLoading(true);
-
     try {
-      const res = await fetch("/api/approvals?status=pending");
+      const res = await fetch(
+        "/api/approvals?status=pending"
+      );
       const data = await res.json();
-      setApprovals(res.ok && Array.isArray(data) ? data : []);
+      if (res.ok) {
+        setApprovals(asList(data));
+      }
     } catch {
       setApprovals([]);
-    } finally {
-      setApprovalsLoading(false);
     }
   }
 
-  async function refreshWorkspace() {
+  async function loadOfficeStatus() {
+    try {
+      const res = await fetch(
+        "/api/ceo/office-status"
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setRemoteOffices(
+          Array.isArray(data.offices)
+            ? data.offices
+            : []
+        );
+      }
+    } catch {
+      setRemoteOffices([]);
+    }
+  }
+
+  async function loadDailyReport() {
+    try {
+      const res = await fetch(
+        "/api/operations/daily-report"
+      );
+      const data = await res.json();
+      if (res.ok) setDailyReport(data);
+    } catch {
+      setDailyReport(null);
+    }
+  }
+
+  async function refreshSide() {
     await Promise.all([
-      loadTasks(selected),
       loadApprovals(),
-      loadOverview(),
+      loadOfficeStatus(),
+      loadDailyReport(),
     ]);
   }
 
-  async function updateTaskStatus(taskId, status) {
-    try {
-      const res = await fetch(`/api/tasks/${taskId}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ status }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail || "تعذر تحديث المهمة");
-      }
-
-      await refreshWorkspace();
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
-  async function decideApproval(id, decision) {
-    try {
-      const res = await fetch(`/api/approvals/${id}/${decision}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail || "تعذر تحديث طلب الموافقة");
-      }
-
-      await Promise.all([loadApprovals(), loadOverview()]);
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
   useEffect(() => {
-    loadOverview();
-    loadApprovals();
+    loadConversations();
+    refreshSide();
+
+    const timer = window.setInterval(
+      refreshSide,
+      5000
+    );
+
+    return () => {
+      window.clearInterval(timer);
+    };
   }, []);
 
-  useEffect(() => {
-    loadConversations(selected);
-    loadTasks(selected);
-  }, [selected]);
-
-  async function openConversation(id) {
-    setLoading(true);
+  async function loadAttachments(id) {
+    if (!id) {
+      setAttachments([]);
+      return;
+    }
 
     try {
-      const res = await fetch(`/api/conversations/${id}/messages`);
+      const params =
+        new URLSearchParams({
+          module: "ceo_chat",
+          entity_type: "conversation",
+          entity_id: id,
+          status: "active",
+        });
+
+      const res = await fetch(
+        `/api/hr/attachments?${params.toString()}`
+      );
+      const data = await res.json();
+
+      if (res.ok) {
+        setAttachments(asList(data));
+      }
+    } catch {
+      setAttachments([]);
+    }
+  }
+
+  async function openConversation(id) {
+    if (!id || loading) return;
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch(
+        `/api/conversations/${id}/messages`
+      );
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.detail || "تعذر تحميل المحادثة");
+        throw new Error(
+          data.detail || "تعذر تحميل المحادثة"
+        );
       }
 
       setConversationId(id);
+      const rows = asList(
+        data.messages || data
+      );
+
       setMessages(
-        (data.messages || []).map((item) => ({
+        rows.map((item) => ({
           role: item.role,
           content: item.content,
         }))
       );
+
+      await loadAttachments(id);
     } catch (err) {
-      alert(err.message);
+      setError(err.message);
     } finally {
-      setUploadingFiles(false);
       setLoading(false);
     }
   }
@@ -302,73 +276,13 @@ export default function Home() {
     setMessages([]);
     setMessage("");
     setPendingFiles([]);
-    setCeoAttachments([]);
+    setAttachments([]);
+    setLocalBusy([]);
+    setError("");
   }
 
-  function changeAgent(slug) {
-    setSelected(slug);
-    setConversationId(null);
-    setMessages([]);
-    setMessage("");
-    setConversations([]);
-    setTasks([]);
-    setPendingFiles([]);
-    setCeoAttachments([]);
-  }
-
-  function enterOffice(slug) {
-    changeAgent(slug);
-
-    window.setTimeout(() => {
-      document
-        .getElementById("agent-workspace")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 50);
-  }
-
-  async function loadCeoAttachments(id) {
-    if (!id || selected !== "ceo") {
-      setCeoAttachments([]);
-      return;
-    }
-
-    try {
-      const params = new URLSearchParams({
-        module: "ceo_chat",
-        entity_type: "conversation",
-        entity_id: id,
-        status: "active",
-      });
-
-      const res = await fetch(
-        `/api/hr/attachments?${params.toString()}`
-      );
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(
-          data.detail || "تعذر تحميل مرفقات الرئيس التنفيذي"
-        );
-      }
-
-      setCeoAttachments(
-        Array.isArray(data) ? data : []
-      );
-    } catch {
-      setCeoAttachments([]);
-    }
-  }
-
-  useEffect(() => {
-    if (selected === "ceo" && conversationId) {
-      loadCeoAttachments(conversationId);
-    } else {
-      setCeoAttachments([]);
-    }
-  }, [selected, conversationId]);
-
-  async function ensureCeoConversation(currentId) {
-    if (currentId) return currentId;
+  async function ensureConversation(id) {
+    if (id) return id;
 
     const res = await fetch(
       "/api/ceo/conversations/bootstrap",
@@ -378,7 +292,7 @@ export default function Home() {
 
     if (!res.ok) {
       throw new Error(
-        data.detail || "تعذر إنشاء محادثة لإرفاق الملفات"
+        data.detail || "تعذر إنشاء المحادثة"
       );
     }
 
@@ -386,20 +300,25 @@ export default function Home() {
     return data.conversation_id;
   }
 
-  async function uploadCeoFiles(targetConversationId, files) {
+  async function uploadFiles(id, files) {
     const uploaded = [];
 
     for (const file of files) {
       const form = new FormData();
-
       form.append("module", "ceo_chat");
       form.append("entity_type", "conversation");
-      form.append("entity_id", targetConversationId);
+      form.append("entity_id", id);
       form.append("document_type", "ceo_reference");
       form.append("uploaded_by", "user");
-      form.append("confidentiality_level", "confidential");
+      form.append(
+        "confidentiality_level",
+        "confidential"
+      );
       form.append("title", file.name);
-      form.append("description", "CEO chat source attachment");
+      form.append(
+        "description",
+        "CEO command source attachment"
+      );
       form.append("file", file);
 
       const res = await fetch(
@@ -409,12 +328,11 @@ export default function Home() {
           body: form,
         }
       );
-
       const data = await res.json();
 
       if (!res.ok) {
         throw new Error(
-          data.detail || `تعذر رفع الملف ${file.name}`
+          data.detail || `تعذر رفع ${file.name}`
         );
       }
 
@@ -427,61 +345,97 @@ export default function Home() {
   async function sendMessage(event) {
     event.preventDefault();
 
-    if (((!message.trim()) && pendingFiles.length === 0) || loading || uploadingFiles) return;
+    if (
+      loading
+      || uploading
+      || (
+        !message.trim()
+        && pendingFiles.length === 0
+      )
+    ) {
+      return;
+    }
 
-    const userText = message.trim() || "راجع الملفات المرفقة في هذه المحادثة.";
+    const userText =
+      message.trim()
+      || "راجع الملفات المرفقة ونفّذ المطلوب.";
 
-    setMessages((previous) => [
-      ...previous,
-      { role: "user", content: userText },
-    ]);
-
-    setMessage("");
+    setLocalBusy(
+      inferOffices(userText)
+    );
     setLoading(true);
+    setError("");
+
+    const oldId = conversationId;
 
     try {
-      let activeConversationId = conversationId;
+      let activeId = conversationId;
+      let uploadedNow = [];
 
-      if (
-        selected === "ceo"
-        && pendingFiles.length > 0
-      ) {
-        setUploadingFiles(true);
-
-        activeConversationId =
-          await ensureCeoConversation(
-            activeConversationId
+      if (pendingFiles.length) {
+        setUploading(true);
+        activeId =
+          await ensureConversation(activeId);
+        uploadedNow =
+          await uploadFiles(
+            activeId,
+            pendingFiles
           );
-
-        await uploadCeoFiles(
-          activeConversationId,
-          pendingFiles
-        );
-
         setPendingFiles([]);
-        await loadCeoAttachments(activeConversationId);
+        await loadAttachments(activeId);
       }
 
-      const res = await fetch(`/api/chat/${selected}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const names = uploadedNow
+        .map((row) =>
+          row.original_file_name || row.title
+        )
+        .filter(Boolean);
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "user",
+          content:
+            userText
+            + (
+              names.length
+                ? "\n\n📎 "
+                  + names.join("\n📎 ")
+                : ""
+            ),
         },
-        body: JSON.stringify({
-          message: userText,
-          conversation_id: activeConversationId,
-        }),
-      });
+      ]);
+
+      setMessage("");
+
+      const res = await fetch(
+        "/api/chat/ceo",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            message: userText,
+            conversation_id: activeId,
+          }),
+        }
+      );
 
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.detail || "تعذر التواصل مع الوكيل");
+        throw new Error(
+          data.detail
+          || "تعذر تنفيذ الطلب"
+        );
       }
 
-      const wasNew = !conversationId;
+      setConversationId(
+        data.conversation_id
+      );
 
-      setConversationId(data.conversation_id);
       setMessages((previous) => [
         ...previous,
         {
@@ -490,575 +444,628 @@ export default function Home() {
         },
       ]);
 
-      if (wasNew) {
-        await loadConversations(selected);
+      if (!oldId) {
+        await loadConversations();
       }
 
-      await refreshWorkspace();
+      await Promise.all([
+        loadAttachments(
+          data.conversation_id
+        ),
+        refreshSide(),
+      ]);
     } catch (err) {
+      setError(err.message);
       setMessages((previous) => [
         ...previous,
         {
           role: "assistant",
-          content: `حدث خطأ أثناء التواصل مع الوكيل: ${err.message}`,
+          content:
+            `تعذر إكمال الطلب: ${err.message}`,
         },
       ]);
     } finally {
+      setUploading(false);
       setLoading(false);
+      setLocalBusy([]);
+
+      window.setTimeout(
+        loadOfficeStatus,
+        350
+      );
     }
   }
 
+  async function decideApproval(
+    id,
+    decision
+  ) {
+    try {
+      const res = await fetch(
+        `/api/approvals/${id}/${decision}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            reason:
+              decision === "approve"
+                ? "Approved from CEO-only command center"
+                : "Rejected from CEO-only command center",
+          }),
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(
+          data.detail || "تعذر تنفيذ القرار"
+        );
+      }
+
+      await refreshSide();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  const finance =
+    dailyReport?.commercial_finance || {};
+  const tasks =
+    dailyReport?.tasks || {};
+
   return (
-    <main className={styles.appShell} dir="rtl">
-      <header className={styles.topbar}>
-        <a className={styles.brand} href="/">
-          <img src="/brand/enclave-logo.svg" alt="Enclave" />
-          <div>
-            <strong>Enclave</strong>
-            <span>AI Command Center</span>
-          </div>
-        </a>
+    <main className="shell" dir="rtl">
+      <style>{`
+        *{box-sizing:border-box}
+        body{margin:0;background:#06191f;color:#f6fbfc}
+        button,input{font:inherit}
+        .shell{
+          min-height:100vh;
+          padding:24px;
+          font-family:Arial,"Segoe UI",sans-serif;
+          background:
+            radial-gradient(circle at 50% 0%,rgba(29,144,143,.16),transparent 32%),
+            linear-gradient(180deg,#061c23,#04151b)
+        }
+        .top{
+          max-width:1550px;margin:0 auto 18px;
+          display:flex;align-items:center;justify-content:space-between;gap:14px
+        }
+        .brand{display:flex;gap:11px;align-items:center}
+        .brand img{width:44px;height:44px}
+        .brand strong{font-size:24px}
+        .sub{font-size:11px;color:#72cfc7;margin-top:4px}
+        .new{
+          border:1px solid rgba(55,220,203,.35);
+          color:#cffff9;background:rgba(19,102,101,.18);
+          border-radius:10px;padding:10px 14px;cursor:pointer
+        }
+        .layout{
+          max-width:1550px;margin:auto;
+          display:grid;grid-template-columns:minmax(0,1fr) 400px;
+          gap:18px;align-items:start
+        }
+        .panel{
+          background:rgba(5,38,47,.9);
+          border:1px solid rgba(70,205,195,.2);
+          border-radius:17px;overflow:hidden
+        }
+        .chatHead{
+          padding:18px 20px;border-bottom:1px solid rgba(70,205,195,.14);
+          display:flex;align-items:center;justify-content:space-between
+        }
+        .ceoLine{display:flex;gap:11px;align-items:center}
+        .ceo{
+          width:46px;height:46px;border-radius:13px;display:grid;place-items:center;
+          background:linear-gradient(135deg,#dbfffb,#2bdec9);color:#05272e;font-weight:900
+        }
+        .chatBody{min-height:550px;max-height:65vh;overflow:auto;padding:22px}
+        .empty{min-height:420px;display:grid;place-items:center;text-align:center;color:#92bbbb}
+        .empty h2{color:#fff;font-size:28px;margin:0 0 10px}
+        .row{display:flex;margin-bottom:14px}
+        .row.user{justify-content:flex-start}
+        .row.assistant{justify-content:flex-end}
+        .bubble{
+          max-width:82%;padding:13px 16px;border-radius:14px;white-space:pre-wrap;line-height:1.8
+        }
+        .user .bubble{background:linear-gradient(135deg,#38dbc7,#198f89);color:#04262d;font-weight:650}
+        .assistant .bubble{background:#0a3943;border:1px solid rgba(87,218,207,.18)}
+        .typing{font-size:12px;color:#72e2d5}
+        .composerBox{padding:15px;border-top:1px solid rgba(70,205,195,.14)}
+        .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px}
+        .chip{
+          padding:6px 9px;border-radius:8px;font-size:11px;text-decoration:none;color:#e3fffb;
+          background:rgba(25,100,103,.18);border:1px solid rgba(70,205,195,.25)
+        }
+        .chip button{border:0;background:none;color:inherit;cursor:pointer}
+        .composer{display:flex;gap:8px}
+        .attach{
+          width:46px;min-width:46px;display:grid;place-items:center;cursor:pointer;font-size:19px;
+          border-radius:11px;background:#0a3943;border:1px solid rgba(70,205,195,.25)
+        }
+        .composer input[type=text]{
+          flex:1;min-width:0;background:#082c35;color:white;
+          border:1px solid rgba(70,205,195,.22);border-radius:11px;padding:13px;outline:none
+        }
+        .send{
+          min-width:92px;border:0;border-radius:11px;background:linear-gradient(135deg,#68f0e0,#24b7a9);
+          color:#03242a;font-weight:900;cursor:pointer
+        }
+        .side{display:grid;gap:14px}
+        .sideBox{padding:16px}
+        .sideBox h3{margin:0 0 11px;font-size:16px}
+        .hint{font-size:10px;line-height:1.6;color:#799fa1;margin-bottom:10px}
+        .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+        .office{
+          position:relative;min-height:100px;border-radius:12px;padding:10px;overflow:hidden;
+          background:linear-gradient(180deg,rgba(8,63,72,.74),rgba(4,38,46,.94));
+          border:1px solid rgba(70,205,195,.17);transition:.25s
+        }
+        .office.active{
+          border-color:#4ff5dc;
+          box-shadow:0 0 8px rgba(55,255,224,.72),0 0 27px rgba(33,216,193,.35);
+          animation:pulse 1.3s ease-in-out infinite
+        }
+        .office.waiting{
+          border-color:#ffc365;
+          box-shadow:0 0 11px rgba(255,183,68,.48)
+        }
+        @keyframes pulse{50%{filter:brightness(1.27)}}
+        .short{
+          width:30px;height:30px;border-radius:8px;display:grid;place-items:center;
+          background:linear-gradient(135deg,#ddfffb,#2cdcc8);color:#073038;
+          font-size:9px;font-weight:900;margin-bottom:7px
+        }
+        .officeName{font-size:11px;font-weight:800}
+        .officeState{font-size:9px;color:#759fa1;margin-top:7px}
+        .active .officeState{color:#71ffe7}
+        .waiting .officeState{color:#ffd18a}
+        .approval{padding:10px 0;border-top:1px solid rgba(70,205,195,.11)}
+        .approval:first-of-type{border-top:0}
+        .approval strong{font-size:11px;display:block}
+        .approval small{color:#86a8aa}
+        .actions{display:flex;gap:6px;margin-top:7px}
+        .ok,.no{border-radius:7px;padding:5px 8px;font-size:9px;cursor:pointer}
+        .ok{color:#a5ffec;border:1px solid rgba(62,230,191,.45);background:rgba(21,113,93,.2)}
+        .no{color:#ffc2c8;border:1px solid rgba(255,109,122,.4);background:rgba(130,31,41,.2)}
+        .history{display:grid;gap:6px;max-height:175px;overflow:auto}
+        .history button{
+          text-align:right;padding:8px;border-radius:8px;cursor:pointer;color:#e8fffc;
+          border:1px solid rgba(70,205,195,.12);background:rgba(8,48,57,.75)
+        }
+        .metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}
+        .metric{padding:10px;border-radius:9px;background:#082f38;border:1px solid rgba(70,205,195,.1)}
+        .metric b{display:block;font-size:18px}
+        .metric span{font-size:9px;color:#83a7a9}
+        .error{
+          max-width:1550px;margin:0 auto 12px;padding:10px 13px;border-radius:9px;
+          color:#ffc2c8;border:1px solid rgba(255,109,122,.4);background:rgba(130,31,41,.2)
+        }
+        .foot{font-size:9px;color:#638b8e;text-align:center;margin-top:8px}
+        @media(max-width:1000px){.layout{grid-template-columns:1fr}}
+        @media(max-width:600px){
+          .shell{padding:10px}.grid{grid-template-columns:repeat(2,1fr)}
+          .composer{flex-wrap:wrap}.send{min-height:44px}
+        }
+      `}</style>
 
-        <nav className={styles.topnav}>
-          <a className={styles.navActive} href="/">الرئيسية</a>
-          <a href="#offices">الوكلاء</a>
-          <a href="/dashboard">لوحة الإدارة</a>
-          <a href="#agent-workspace">المهام</a>
-          <a href="/document-intelligence">المستندات</a>
-          <a href="/company-control">الحوكمة</a>
-        </nav>
-
-        <div className={styles.topStatus}>
-          <span className={styles.liveDot} />
+      <header className="top">
+        <div className="brand">
+          <img
+            src="/brand/enclave-logo.svg"
+            alt="Enclave"
+          />
           <div>
-            <strong>{overviewLoading ? "..." : enabledCount}</strong>
-            <span>وكلاء جاهزون</span>
+            <strong>
+              مكتب الرئيس التنفيذي
+            </strong>
+            <div className="sub">
+              CEO-Only Command Center · الإدارات تعمل خلف الكواليس
+            </div>
           </div>
         </div>
+
+        <button
+          className="new"
+          onClick={newConversation}
+        >
+          + محادثة جديدة
+        </button>
       </header>
 
-      <section className={styles.hero}>
-        <div className={styles.heroIntro}>
-          <span className={styles.eyebrow}>ENCLAVE AI · DIGITAL WORKFORCE</span>
-          <h1>
-            فريقك الرقمي
-            <br />
-            يعمل من أجلك
-          </h1>
-          <p>
-            وكلاء ذكاء اصطناعي متخصصون داخل مكاتب تشغيلية مترابطة،
-            يساعدونك على إدارة الأعمال واتخاذ القرار من مركز قيادة واحد.
-          </p>
-
-          <div className={styles.heroStats}>
-            <div>
-              <strong>{overviewLoading ? "—" : enabledCount}</strong>
-              <span>وكلاء نشطون</span>
-            </div>
-            <div>
-              <strong>{overviewLoading ? "—" : openTaskCount}</strong>
-              <span>مهام مفتوحة</span>
-            </div>
-            <div>
-              <strong>{approvalsLoading ? "—" : approvals.length}</strong>
-              <span>موافقات معلقة</span>
-            </div>
-          </div>
-
-          <div className={styles.heroActions}>
-            <button onClick={() => enterOffice("ceo")}>
-              تحدث مع الإدارة التنفيذية
-            </button>
-            <a href="/dashboard">فتح لوحة الإدارة</a>
-          </div>
+      {error ? (
+        <div className="error">
+          {error}
         </div>
+      ) : null}
 
-        <div className={styles.ceoOffice}>
-          <div className={styles.officeHeader}>
-            <div>
-              <span className={styles.officeMark}>CEO</span>
+      <div className="layout">
+        <section className="panel">
+          <div className="chatHead">
+            <div className="ceoLine">
+              <div className="ceo">
+                CEO
+              </div>
               <div>
-                <strong>الإدارة التنفيذية</strong>
-                <span>مكتب القيادة والتحكم</span>
+                <strong>
+                  الرئيس التنفيذي
+                </strong>
+                <div className="sub">
+                  أنت تتعامل معه فقط، وهو يدير الإدارات داخليًا
+                </div>
               </div>
             </div>
-            <span className={styles.onlineBadge}>
-              <i />
-              متصل الآن
+
+            <span
+              className="sub"
+              style={{
+                color: loading
+                  ? "#6affea"
+                  : "#70a3a4",
+              }}
+            >
+              ●{" "}
+              {loading
+                ? "جارٍ التنفيذ"
+                : "جاهز"}
             </span>
           </div>
 
-          <div className={styles.executiveScene}>
-            <div className={styles.sceneGrid} />
-            <div className={styles.scenePanelLeft}>
-              <small>مركز القرار</small>
-              <strong>جاهز</strong>
-              <div className={styles.miniChart}>
-                <i /><i /><i /><i /><i />
-              </div>
-            </div>
-
-            <div className={styles.ceoDesk}>
-              <div className={styles.ceoAvatar}>
-                <span />
-              </div>
-              <div className={styles.monitor} />
-              <div className={styles.deskSurface} />
-              <div className={styles.deskLeg} />
-            </div>
-
-            <div className={styles.sceneMessage}>
-              <span>مرحبًا بك</span>
-              <strong>كل مكتب لديه وكيله المتخصص.</strong>
-              <small>اختر أي مكتب وابدأ العمل مباشرة.</small>
-            </div>
-
-            <div className={styles.scenePanelRight}>
-              <small>حالة المنصة</small>
-              <div className={styles.statusRing}>
-                <span>{enabledCount}</span>
-              </div>
-              <strong>وكلاء جاهزون</strong>
-            </div>
-
-            <div className={`${styles.plant} ${styles.plantRight}`}>
-              <i /><i /><i />
-            </div>
-            <div className={`${styles.plant} ${styles.plantLeft}`}>
-              <i /><i /><i />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className={styles.officeSection} id="offices">
-        <div className={styles.sectionHeading}>
-          <div>
-            <span>AI OFFICES</span>
-            <h2>مكاتب الوكلاء</h2>
-          </div>
-          <p>
-            كل مكتب يمثل إدارة مستقلة، والوكيل داخل المكتب مرتبط
-            بأدوات ووظائف الإدارة نفسها.
-          </p>
-        </div>
-
-        <div className={styles.officeGrid}>
-          {AGENTS.filter((agent) => agent.slug !== "ceo").map((agent) => {
-            const registry = registryBySlug[agent.slug];
-            const online = registry ? registry.enabled === true : true;
-            const agentOpenTasks = allTasks.filter(
-              (task) =>
-                task.agent_slug === agent.slug &&
-                !["completed", "cancelled"].includes(task.status)
-            ).length;
-
-            return (
-              <article
-                className={`${styles.officeCard} ${
-                  selected === agent.slug ? styles.officeCardSelected : ""
-                }`}
-                key={agent.slug}
-              >
-                <div className={styles.cardHeader}>
-                  <div className={styles.cardIdentity}>
-                    <span className={styles.agentIcon}>{agent.short}</span>
-                    <div>
-                      <h3>{agent.ar}</h3>
-                      <span>{agent.name}</span>
-                    </div>
-                  </div>
-
-                  <span className={online ? styles.onlineBadge : styles.offlineBadge}>
-                    <i />
-                    {online ? "متصل الآن" : "غير متاح"}
-                  </span>
-                </div>
-
-                <div className={styles.miniOffice}>
-                  <div className={styles.miniWall}>
-                    <div className={styles.miniBars}>
-                      <i /><i /><i /><i />
-                    </div>
-                    <div className={styles.miniData}>
-                      <span />
-                      <span />
-                      <span />
-                    </div>
-                  </div>
-
-                  <div className={styles.miniAgent}>
-                    <i />
-                  </div>
-                  <div className={styles.miniDesk}>
-                    <span />
-                  </div>
-                  <div className={styles.miniChair} />
-                  <div className={styles.miniPlant}>
-                    <i /><i /><i />
-                  </div>
-                </div>
-
-                <div className={styles.cardBody}>
-                  <strong>{agent.office}</strong>
-                  <p>{agent.description}</p>
-                </div>
-
-                <div className={styles.cardFooter}>
-                  <span>
-                    {agentOpenTasks} مهام مفتوحة
-                  </span>
+          <div className="chatBody">
+            {messages.length === 0 ? (
+              <div className="empty">
+                <div>
+                  <h2>
+                    وش تبي ننجز؟
+                  </h2>
                   <div>
-                    <button onClick={() => enterOffice(agent.slug)}>
-                      تحدث مع الوكيل
-                    </button>
-                    <a href={agent.route}>فتح الإدارة</a>
+                    قل للرئيس التنفيذي طلبك مباشرة وارفق الملفات إذا احتجت.
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      marginTop: 9,
+                    }}
+                  >
+                    مثال: جهز العرض المالي لشوري، تابع فهد، أو طلع لي الفاتورة المستحقة.
                   </div>
                 </div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className={styles.workspaceSection} id="agent-workspace">
-        <div className={styles.workspaceHeader}>
-          <div>
-            <span className={styles.workspaceKicker}>ACTIVE OFFICE</span>
-            <h2>{activeAgent.ar}</h2>
-            <p>{activeAgent.description}</p>
-          </div>
-
-          <div className={styles.workspaceActions}>
-            <span className={styles.onlineBadge}>
-              <i />
-              {registryBySlug[selected]?.enabled === false ? "غير متاح" : "متصل الآن"}
-            </span>
-            <a href={activeAgent.route}>فتح نظام الإدارة</a>
-          </div>
-        </div>
-
-        <div className={styles.workspaceGrid}>
-          <aside className={styles.workspaceSidebar}>
-            <div className={styles.sideBlock}>
-              <div className={styles.sideTitle}>
-                <strong>المحادثات</strong>
-                <button onClick={newConversation}>+ جديدة</button>
               </div>
-
-              {historyLoading && <p className={styles.mutedText}>جاري التحميل...</p>}
-
-              {!historyLoading && conversations.length === 0 && (
-                <p className={styles.emptySmall}>لا توجد محادثات سابقة.</p>
-              )}
-
-              <div className={styles.conversationList}>
-                {conversations.map((conversation) => (
-                  <button
-                    key={conversation.id}
+            ) : (
+              messages.map(
+                (item, index) => (
+                  <div
                     className={
-                      conversationId === conversation.id
-                        ? styles.conversationActive
-                        : ""
+                      `row ${item.role === "user" ? "user" : "assistant"}`
                     }
-                    onClick={() => openConversation(conversation.id)}
+                    key={index}
                   >
-                    <strong>{conversation.title || "محادثة"}</strong>
-                    <span>{conversation.created_at || ""}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className={styles.sideBlock}>
-              <div className={styles.sideTitle}>
-                <strong>مهام المكتب</strong>
-                <span>{tasks.length}</span>
-              </div>
-
-              {tasksLoading && <p className={styles.mutedText}>جاري التحميل...</p>}
-
-              {!tasksLoading && tasks.length === 0 && (
-                <p className={styles.emptySmall}>لا توجد مهام لهذا الوكيل.</p>
-              )}
-
-              <div className={styles.taskList}>
-                {tasks.slice(0, 6).map((task) => (
-                  <div className={styles.taskItem} key={task.id}>
-                    <div>
-                      <strong>{task.title}</strong>
-                      <span>
-                        {statusLabel(task.status)} · {priorityLabel(task.priority)}
-                      </span>
+                    <div className="bubble">
+                      {item.content}
                     </div>
-
-                    {task.status !== "completed" && task.status !== "cancelled" && (
-                      <button
-                        onClick={() => updateTaskStatus(task.id, "completed")}
-                      >
-                        إنهاء
-                      </button>
-                    )}
                   </div>
-                ))}
+                )
+              )
+            )}
+
+            {loading ? (
+              <div className="typing">
+                الرئيس التنفيذي ينسق التنفيذ مع الإدارات المعنية...
               </div>
+            ) : null}
+          </div>
+
+          <div className="composerBox">
+            {(
+              pendingFiles.length
+              || attachments.length
+            ) ? (
+              <div className="chips">
+                {pendingFiles.map(
+                  (file, index) => (
+                    <span
+                      className="chip"
+                      key={
+                        `${file.name}-${index}`
+                      }
+                    >
+                      📎 {file.name}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPendingFiles(
+                            (previous) =>
+                              previous.filter(
+                                (_, i) =>
+                                  i !== index
+                              )
+                          )
+                        }
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )
+                )}
+
+                {attachments.map(
+                  (item) => (
+                    <a
+                      className="chip"
+                      key={item.id}
+                      href={item.download_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      📄{" "}
+                      {item.original_file_name
+                        || item.title
+                        || "ملف"}
+                    </a>
+                  )
+                )}
+              </div>
+            ) : null}
+
+            <form
+              className="composer"
+              onSubmit={sendMessage}
+            >
+              <label className="attach">
+                📎
+                <input
+                  type="file"
+                  multiple
+                  accept=".pdf,.docx,.txt,.csv"
+                  disabled={
+                    loading || uploading
+                  }
+                  onChange={(event) => {
+                    const files =
+                      Array.from(
+                        event.target.files || []
+                      );
+
+                    setPendingFiles(
+                      (previous) => [
+                        ...previous,
+                        ...files,
+                      ].slice(0, 10)
+                    );
+
+                    event.target.value = "";
+                  }}
+                  style={{
+                    display: "none",
+                  }}
+                />
+              </label>
+
+              <input
+                type="text"
+                value={message}
+                onChange={(event) =>
+                  setMessage(
+                    event.target.value
+                  )
+                }
+                placeholder="قل للرئيس التنفيذي وش تبي..."
+                disabled={
+                  loading || uploading
+                }
+              />
+
+              <button
+                className="send"
+                type="submit"
+                disabled={
+                  loading || uploading
+                }
+              >
+                {uploading
+                  ? "رفع..."
+                  : loading
+                    ? "ينفذ..."
+                    : "إرسال"}
+              </button>
+            </form>
+
+            <div className="foot">
+              لا يوجد دفع أو إرسال خارجي أو التزام مالي خارج ضوابط النظام والاعتمادات.
+            </div>
+          </div>
+        </section>
+
+        <aside className="side">
+          <section className="panel sideBox">
+            <h3>
+              نشاط الإدارات
+            </h3>
+            <div className="hint">
+              المكاتب هنا مؤشرات فقط. إذا دخلت إدارة في تنفيذ طلبك تنوّر، وبعد انتهاء العمل ترجع للوضع الطبيعي.
             </div>
 
-            <div className={styles.sideBlock}>
-              <div className={styles.sideTitle}>
-                <strong>الموافقات المعلقة</strong>
-                <span>{approvals.length}</span>
-              </div>
+            <div className="grid">
+              {OFFICES.map(
+                ([slug, name, short]) => {
+                  const remote =
+                    officeMap[slug];
 
-              {approvalsLoading && <p className={styles.mutedText}>جاري التحميل...</p>}
+                  let status =
+                    remote?.status
+                    || "idle";
 
-              {!approvalsLoading && approvals.length === 0 && (
-                <p className={styles.emptySmall}>لا توجد موافقات معلقة.</p>
+                  if (
+                    localBusy.includes(slug)
+                  ) {
+                    status = "active";
+                  }
+
+                  return (
+                    <div
+                      key={slug}
+                      className={
+                        `office ${status === "active" ? "active" : status === "waiting_approval" ? "waiting" : ""}`
+                      }
+                    >
+                      <div className="short">
+                        {short}
+                      </div>
+                      <div className="officeName">
+                        {name}
+                      </div>
+                      <div className="officeState">
+                        {officeLabel(status)}
+                        {remote?.open_tasks
+                          ? ` · ${remote.open_tasks} مهمة`
+                          : ""}
+                        {remote?.pending_approvals
+                          ? ` · ${remote.pending_approvals} اعتماد`
+                          : ""}
+                      </div>
+                    </div>
+                  );
+                }
               )}
+            </div>
+          </section>
 
-              <div className={styles.approvalList}>
-                {approvals.slice(0, 4).map((approval) => (
-                  <div className={styles.approvalItem} key={approval.id}>
-                    <strong>{approval.title}</strong>
-                    <span>{approval.risk_level || "normal"}</span>
-                    <div>
+          <section className="panel sideBox">
+            <h3>
+              قرارات تحتاجك
+            </h3>
+
+            {approvals.length === 0 ? (
+              <div className="hint">
+                ما فيه اعتماد معلق حاليًا.
+              </div>
+            ) : (
+              approvals
+                .slice(0, 6)
+                .map((item) => (
+                  <div
+                    className="approval"
+                    key={item.id}
+                  >
+                    <strong>
+                      {item.title
+                        || item.action_type
+                        || "اعتماد"}
+                    </strong>
+                    <small>
+                      {item.risk_level
+                        ? `المخاطر: ${item.risk_level}`
+                        : "بانتظار قرارك"}
+                    </small>
+
+                    <div className="actions">
                       <button
-                        onClick={() => decideApproval(approval.id, "approve")}
+                        className="ok"
+                        onClick={() =>
+                          decideApproval(
+                            item.id,
+                            "approve"
+                          )
+                        }
                       >
                         اعتماد
                       </button>
                       <button
-                        className={styles.rejectButton}
-                        onClick={() => decideApproval(approval.id, "reject")}
+                        className="no"
+                        onClick={() =>
+                          decideApproval(
+                            item.id,
+                            "reject"
+                          )
+                        }
                       >
                         رفض
                       </button>
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          </aside>
-
-          <div className={styles.chatPanel}>
-            <div className={styles.chatHeader}>
-              <div className={styles.chatAgentBadge}>{activeAgent.short}</div>
-              <div>
-                <strong>{activeAgent.ar}</strong>
-                <span>{activeAgent.office}</span>
-              </div>
-              <span className={styles.chatOnline}>
-                <i />
-                Online
-              </span>
-            </div>
-
-            <div className={styles.messagesArea}>
-              {messages.length === 0 && (
-                <div className={styles.chatEmpty}>
-                  <div className={styles.emptyOfficeIcon}>
-                    <span>{activeAgent.short}</span>
-                  </div>
-                  <h3>كيف أقدر أخدمك اليوم؟</h3>
-                  <p>ابدأ محادثة مع {activeAgent.ar}</p>
-                </div>
-              )}
-
-              {messages.map((item, index) => (
-                <div
-                  key={`${item.role}-${index}`}
-                  className={
-                    item.role === "user"
-                      ? styles.userMessageRow
-                      : styles.agentMessageRow
-                  }
-                >
-                  <div
-                    className={
-                      item.role === "user"
-                        ? styles.userMessage
-                        : styles.agentMessage
-                    }
-                  >
-                    {item.content}
-                  </div>
-                </div>
-              ))}
-
-              {loading && (
-                <div className={styles.typing}>
-                  <i /><i /><i />
-                  الوكيل يقوم بتحليل طلبك...
-                </div>
-              )}
-            </div>
-
-            {selected === "ceo" && (
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 8,
-                  marginBottom: 10,
-                }}
-              >
-                {pendingFiles.map((file, index) => (
-                  <span
-                    key={`${file.name}-${file.size}-${index}`}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "6px 9px",
-                      borderRadius: 8,
-                      border: "1px solid rgba(47,180,141,.35)",
-                      background: "rgba(47,180,141,.10)",
-                      fontSize: 12,
-                    }}
-                  >
-                    📎 {file.name}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPendingFiles(
-                          (previous) =>
-                            previous.filter(
-                              (_, itemIndex) =>
-                                itemIndex !== index
-                            )
-                        )
-                      }
-                      style={{
-                        border: 0,
-                        background: "transparent",
-                        color: "inherit",
-                        cursor: "pointer",
-                        padding: 0,
-                        fontSize: 16,
-                      }}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-
-                {ceoAttachments.map((item) => (
-                  <a
-                    key={item.id}
-                    href={item.download_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      padding: "6px 9px",
-                      borderRadius: 8,
-                      border: "1px solid rgba(217,201,170,.32)",
-                      background: "rgba(217,201,170,.08)",
-                      color: "inherit",
-                      textDecoration: "none",
-                      fontSize: 12,
-                    }}
-                  >
-                    📄{" "}
-                    {item.original_file_name
-                      || item.title
-                      || "Attachment"}
-                  </a>
-                ))}
-              </div>
+                ))
             )}
+          </section>
 
-            <form
-              className={styles.chatComposer}
-              onSubmit={sendMessage}
+          <section className="panel sideBox">
+            <h3>
+              موجز اليوم
+            </h3>
+
+            <div className="metrics">
+              <div className="metric">
+                <b>
+                  {finance
+                    ?.ready_for_approval
+                    ?? 0}
+                </b>
+                <span>
+                  فواتير للاعتماد
+                </span>
+              </div>
+              <div className="metric">
+                <b>
+                  {tasks
+                    ?.overdue
+                    ?? tasks?.open
+                    ?? 0}
+                </b>
+                <span>
+                  أعمال مفتوحة
+                </span>
+              </div>
+            </div>
+
+            <div
+              className="hint"
+              style={{
+                marginTop: 9,
+                marginBottom: 0,
+              }}
             >
-              {selected === "ceo" && (
-                <label
-                  title="إرفاق ملفات للرئيس التنفيذي"
-                  style={{
-                    width: 44,
-                    minWidth: 44,
-                    height: 44,
-                    display: "grid",
-                    placeItems: "center",
-                    borderRadius: 10,
-                    border: "1px solid rgba(47,180,141,.35)",
-                    background: "rgba(47,180,141,.10)",
-                    cursor:
-                      loading || uploadingFiles
-                        ? "wait"
-                        : "pointer",
-                    fontSize: 19,
-                  }}
-                >
-                  📎
-                  <input
-                    type="file"
-                    multiple
-                    accept=".pdf,.docx,.txt,.csv"
-                    disabled={loading || uploadingFiles}
-                    onChange={(event) => {
-                      const files = Array.from(
-                        event.target.files || []
-                      );
+              اطلب من الرئيس التنفيذي: «عطني تقرير اليوم».
+            </div>
+          </section>
 
-                      setPendingFiles(
-                        (previous) => [
-                          ...previous,
-                          ...files,
-                        ].slice(0, 10)
-                      );
+          <section className="panel sideBox">
+            <h3>
+              محادثات الرئيس التنفيذي
+            </h3>
 
-                      event.target.value = "";
-                    }}
-                    style={{ display: "none" }}
-                  />
-                </label>
+            <div className="history">
+              {conversations.length === 0 ? (
+                <div className="hint">
+                  ما فيه محادثات سابقة.
+                </div>
+              ) : (
+                conversations
+                  .slice(0, 8)
+                  .map(
+                    (item, index) => (
+                      <button
+                        key={
+                          item.id || index
+                        }
+                        onClick={() =>
+                          openConversation(
+                            item.id
+                          )
+                        }
+                      >
+                        {item.title
+                          || `محادثة ${index + 1}`}
+                      </button>
+                    )
+                  )
               )}
-
-              <input
-                value={message}
-                onChange={(event) =>
-                  setMessage(event.target.value)
-                }
-                placeholder={
-                  selected === "ceo"
-                    ? "اكتب طلبك وارفق العرض الفني والمالي..."
-                    : `اسأل ${activeAgent.ar}...`
-                }
-                disabled={loading || uploadingFiles}
-              />
-
-              <button
-                type="submit"
-                disabled={loading || uploadingFiles}
-              >
-                {uploadingFiles
-                  ? "جاري الرفع..."
-                  : "إرسال"}
-              </button>
-            </form>
-          </div>
-        </div>
-      </section>
-
-      <footer className={styles.footer}>
-        <div className={styles.footerBrand}>
-          <img src="/brand/enclave-logo.svg" alt="Enclave" />
-          <div>
-            <strong>Enclave</strong>
-            <span>AI Agents for a Smarter Business</span>
-          </div>
-        </div>
-
-        <p>من وكلاء متخصصين إلى مؤسسة تعمل بذكاء مترابط.</p>
-
-        <span className={styles.footerStatus}>
-          <i />
-          النظام جاهز
-        </span>
-      </footer>
+            </div>
+          </section>
+        </aside>
+      </div>
     </main>
   );
 }
