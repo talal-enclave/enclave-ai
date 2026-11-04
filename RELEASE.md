@@ -172,3 +172,15 @@ Tag: `v1.0.0`
 - Supports Arabic and English in DOCX/PDF through DejaVu fonts, Arabic shaping, and bidirectional rendering.
 - Excludes generated outputs from CEO source-evidence extraction to avoid circular evidence.
 - Performs no external sending, accounting posting, payment, or bank transfer.
+
+## v1.4.1 Direct Cost Semantics & Artifact Completion UX
+
+- Clarifies Sales Quotation direct_cost semantics: stored direct_cost is total direct cost for the quotation line.
+- When quantity is greater than one, the CEO must not infer whether a stated Direct Cost is per-unit or line-total.
+- Ambiguous Direct Cost basis blocks quotation creation and asks only whether the amount is per unit or total for the line.
+- Explicit per-unit cost is multiplied by quantity before storage; explicit line-total cost is stored unchanged.
+- Quantity equal to one remains unambiguous.
+- Successful draft quotation + DOCX/PDF generation ends with a concise execution result instead of generic A/B workflow choices.
+- validity_date, payment_terms and scope_summary remain optional; null approval fields are normal for a draft quotation.
+- No automatic Finance/Sales notification or review claim is allowed without an explicit user request and real execution evidence.
+- Existing Shory quotation and generated artifacts are preserved unchanged by this release.

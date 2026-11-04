@@ -1928,6 +1928,26 @@ async def chat_with_agent(
             "the quotation is approved/activated for external use.\n"
         )
 
+    # ENCLAVE v1.4.1 - FINANCIAL PROPOSAL COMPLETION UX
+    if agent.slug == "ceo":
+        effective_instructions += (
+            "\n\nFINANCIAL PROPOSAL COMPLETION UX v1.4.1:\n"
+            "- If the current request successfully creates a Sales Quotation and "
+            "generates its DOCX/PDF artifacts, report the executed quotation and "
+            "attached files concisely, then stop. Do not add generic A/B options.\n"
+            "- validity_date, payment_terms and scope_summary are optional fields. "
+            "Never describe them as required missing fields unless the user or an "
+            "approved policy explicitly requires them for that transaction.\n"
+            "- approval_id/approval_status being null on a draft quotation is "
+            "expected. Approval is required before external quotation use or "
+            "activation, not before creating an internal draft.\n"
+            "- Do not claim or propose that Finance or Sales were notified, asked "
+            "to review, or assigned work unless the user explicitly requested that "
+            "action and execution evidence proves a real supported action.\n"
+            "- If the user only asked to create the draft and files, do not ask "
+            "for another decision after successful completion.\n"
+        )
+
     # CEO ORCHESTRATION HOOK v1.1.1
     ceo_orchestration = None
     ceo_execution = None
@@ -78232,6 +78252,65 @@ def _ceo_exec_text_in_source(value, source_text):
     return value.casefold() in str(source_text or "").casefold()
 
 
+# ENCLAVE v1.4.1 - DIRECT COST BASIS SAFETY
+def _ceo_exec_detect_direct_cost_basis(source_text: str):
+    source = str(source_text or "").casefold()
+
+    per_unit_markers = (
+        "direct cost per unit",
+        "cost per unit",
+        "per-unit direct cost",
+        "direct cost each",
+        "cost each",
+        "per pt",
+        "per assessment",
+        "\u0644\u0643\u0644 \u0648\u062d\u062f\u0629",
+        "\u0644\u0644\u0648\u062d\u062f\u0629",
+        "\u062a\u0643\u0644\u0641\u0629 \u0627\u0644\u0648\u062d\u062f\u0629",
+        "\u0644\u0643\u0644 \u0645\u0631\u0629",
+        "\u0644\u0644\u0645\u0631\u0629",
+        "\u0644\u0643\u0644 pt",
+    )
+
+    line_total_markers = (
+        "total direct cost",
+        "direct cost total",
+        "total cost for the line",
+        "line total cost",
+        "total line cost",
+        "\u0627\u062c\u0645\u0627\u0644\u064a \u0627\u0644\u062a\u0643\u0644\u0641\u0629",
+        "\u0625\u062c\u0645\u0627\u0644\u064a \u0627\u0644\u062a\u0643\u0644\u0641\u0629",
+        "\u0627\u0644\u062a\u0643\u0644\u0641\u0629 \u0627\u0644\u0627\u062c\u0645\u0627\u0644\u064a\u0629",
+        "\u0627\u0644\u062a\u0643\u0644\u0641\u0629 \u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a\u0629",
+        "\u062a\u0643\u0644\u0641\u0629 \u0627\u0644\u0633\u0637\u0631",
+    )
+
+    per_unit = any(marker in source for marker in per_unit_markers)
+    line_total = any(marker in source for marker in line_total_markers)
+
+    if per_unit and line_total:
+        return "ambiguous"
+    if per_unit:
+        return "per_unit"
+    if line_total:
+        return "line_total"
+    return None
+
+
+def _ceo_exec_line_total_direct_cost(
+    direct_cost,
+    quantity,
+    basis,
+):
+    cost = float(direct_cost)
+    qty = float(quantity)
+
+    if basis == "per_unit":
+        return cost * qty
+
+    return cost
+
+
 # ENCLAVE v1.3.1 - ACCOUNTABILITY RESOLUTION
 def _ceo_exec_resolve_accountable_person(
     source_text: str,
@@ -79250,12 +79329,53 @@ async def _ceo_exec_action(
                     "reason": f"Quotation line {index} direct cost is not evidenced.",
                 }
 
+            direct_cost_basis = (
+                _ceo_exec_detect_direct_cost_basis(
+                    source_text
+                )
+            )
+
+            if float(quantity) > 1:
+                if direct_cost_basis in {
+                    None,
+                    "ambiguous",
+                }:
+                    return {
+                        **base,
+                        "status": "blocked",
+                        "reason": (
+                            f"Quotation line {index} Direct Cost basis is "
+                            "ambiguous because quantity is greater than 1. "
+                            "State whether the Direct Cost amount is per unit "
+                            "or the total cost for the whole line."
+                        ),
+                    }
+            else:
+                direct_cost_basis = (
+                    direct_cost_basis
+                    if direct_cost_basis in {
+                        "per_unit",
+                        "line_total",
+                    }
+                    else "line_total"
+                )
+
+            line_total_direct_cost = (
+                _ceo_exec_line_total_direct_cost(
+                    direct_cost,
+                    quantity,
+                    direct_cost_basis,
+                )
+            )
+
             lines.append(
                 CommercialProposalLineRequest(
                     description=description,
                     quantity=float(quantity),
                     unit_price=float(unit_price),
-                    direct_cost=float(direct_cost),
+                    direct_cost=float(
+                        line_total_direct_cost
+                    ),
                     notes=(
                         str(item.get("notes", "")).strip()
                         or None
@@ -79318,7 +79438,7 @@ async def _ceo_exec_action(
                 payment_terms=payment_terms,
                 scope_summary=scope_summary,
                 notes=(
-                    "Created by CEO Execution Engine v1.3.4. "
+                    "Created by CEO Execution Engine v1.4.1. "
                     "External send was not performed."
                 ),
                 lines=lines,
@@ -79535,6 +79655,18 @@ async def _ceo_execution_layer(
         "or download URLs."
     )
 
+    instructions += (
+        " DIRECT COST SEMANTICS v1.4.1: The authoritative Sales Quotation "
+        "stores direct_cost as the TOTAL direct cost for the quotation line. "
+        "When quantity is greater than 1, never infer whether a user's Direct "
+        "Cost value is per-unit or line-total. The USER SOURCE must explicitly "
+        "say per unit/each or total/line total. If the basis is absent or "
+        "conflicting, the executor must block and ask only whether the stated "
+        "Direct Cost is per unit or total for the line. If the source explicitly "
+        "says per unit, the executor converts it to line total before storing it. "
+        "If quantity is 1, the distinction is immaterial."
+    )
+
     planner_input = (
         "USER SOURCE:\n"
         + source_text[:30000]
@@ -79672,7 +79804,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.4.0",
+        "version": "1.4.1",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
