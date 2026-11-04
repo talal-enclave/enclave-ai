@@ -160,3 +160,15 @@ Tag: `v1.0.0`
 - Approval is still required before external quotation use/activation.
 - Financial Proposal DOCX/PDF generation remains unavailable until the Artifact Engine release.
 - No business records are created, changed, or deleted by this release.
+
+## v1.4.0 Financial Proposal Artifact Engine
+
+- Generates real DOCX and PDF files from an authoritative Sales Quotation record.
+- Links generated files to the Sales Quotation and copies them into the active CEO conversation so the current interface displays download links automatically.
+- Marks draft and pending-approval quotations as internal-review drafts.
+- Excludes direct cost, gross profit, and margin from client-facing files.
+- Uses authoritative Company Profile and Quotation VAT data without inventing tax values.
+- Requires a real quotation with line items; readiness data alone cannot generate files.
+- Supports Arabic and English in DOCX/PDF through DejaVu fonts, Arabic shaping, and bidirectional rendering.
+- Excludes generated outputs from CEO source-evidence extraction to avoid circular evidence.
+- Performs no external sending, accounting posting, payment, or bank transfer.

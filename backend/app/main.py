@@ -1915,6 +1915,19 @@ async def chat_with_agent(
               "- If the current tools cannot execute a requested action or generate a requested file, state that limitation rather than pretending completion.\n"
         )
 
+    # ENCLAVE v1.4.0 - CEO ARTIFACT RESPONSE RULES
+    if agent.slug == "ceo":
+        effective_instructions += (
+            "\n\nARTIFACT ENGINE RULES v1.4.0:\n"
+            "- When financial proposal artifacts are generated, tell the user "
+            "the DOCX and PDF are attached to this conversation and available "
+            "through the attachment download links.\n"
+            "- Never claim generated artifacts were sent externally.\n"
+            "- A generated attachment is output evidence, not source evidence.\n"
+            "- Draft quotations must remain clearly identified as drafts until "
+            "the quotation is approved/activated for external use.\n"
+        )
+
     # CEO ORCHESTRATION HOOK v1.1.1
     ceo_orchestration = None
     ceo_execution = None
@@ -77944,6 +77957,8 @@ async def _ceo_attachment_context(
                 HRAttachment.entity_type == "conversation",
                 HRAttachment.entity_id == conversation_id,
                 HRAttachment.status == "active",
+                HRAttachment.uploaded_by
+                != "CEO Artifact Engine",
             ).order_by(
                 HRAttachment.created_at.asc()
             )
@@ -78157,6 +78172,7 @@ _CEO_EXEC_ACTIONS = {
     "create_business_work_item",
     "prepare_due_invoices",
     "create_commercial_proposal",
+    "generate_financial_proposal_artifacts",
 }
 
 
@@ -78365,8 +78381,8 @@ async def _ceo_exec_snapshot(db: AsyncSession):
         "sales_quotations": [_ceo_exec_row(x) for x in quotations],
         "commercial_invoices": [_ceo_exec_row(x) for x in invoices],
         "artifact_generation": {
-            "financial_proposal_docx": False,
-            "financial_proposal_pdf": False,
+            "financial_proposal_docx": True,
+            "financial_proposal_pdf": True,
             "invoice_print_page": True,
         },
         "safety": {
@@ -78568,8 +78584,8 @@ async def _ceo_exec_proposal_readiness(
                 "internal_approval_before_draft",
             ],
             "artifact_generation": {
-                "financial_proposal_docx": False,
-                "financial_proposal_pdf": False,
+                "financial_proposal_docx": True,
+                "financial_proposal_pdf": True,
             },
         }
 
@@ -78597,8 +78613,8 @@ async def _ceo_exec_proposal_readiness(
                 "line.direct_cost",
             ],
             "artifact_generation": {
-                "financial_proposal_docx": False,
-                "financial_proposal_pdf": False,
+                "financial_proposal_docx": True,
+                "financial_proposal_pdf": True,
             },
         }
 
@@ -78709,8 +78725,8 @@ async def _ceo_exec_proposal_readiness(
         ),
         "read_only_query_requires_approval": False,
         "artifact_generation": {
-            "financial_proposal_docx": False,
-            "financial_proposal_pdf": False,
+            "financial_proposal_docx": True,
+            "financial_proposal_pdf": True,
         },
     }
 
@@ -78757,6 +78773,7 @@ async def _ceo_exec_action(
     action: dict,
     client_name: str | None,
     source_text: str,
+    conversation_id=None,
 ):
     action_type = str(action.get("type", "")).strip()
     data = action.get("data") or {}
@@ -79318,6 +79335,114 @@ async def _ceo_exec_action(
             "external_send": False,
         }
 
+    if action_type == "generate_financial_proposal_artifacts":
+        quotation_id = (
+            str(
+                data.get(
+                    "quotation_id",
+                    "",
+                )
+                or ""
+            ).strip()
+            or None
+        )
+
+        resolved = None
+
+        if quotation_id:
+            try:
+                quote_uuid = uuid.UUID(quotation_id)
+            except Exception:
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": "quotation_id is not a valid UUID.",
+                }
+
+            resolved = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT
+                            q.id,
+                            q.version,
+                            q.status,
+                            a.name AS client_name
+                        FROM sales_quotations q
+                        JOIN sales_opportunities o
+                          ON o.id=q.opportunity_id
+                        JOIN sales_accounts a
+                          ON a.id=o.account_id
+                        WHERE q.id=:quotation_id
+                        """
+                    ),
+                    {"quotation_id": quote_uuid},
+                )
+            ).mappings().first()
+
+            if resolved is None:
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": "The requested quotation does not exist.",
+                }
+
+            if (
+                client_name
+                and str(resolved["client_name"]).casefold()
+                != str(client_name).casefold()
+            ):
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": (
+                        "Quotation does not belong to the named client."
+                    ),
+                }
+
+        else:
+            if not client_name:
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": (
+                        "Client name or quotation_id is required."
+                    ),
+                }
+
+            resolved = await _artifact_latest_quote_for_client(
+                db,
+                client_name,
+            )
+
+            if resolved is None:
+                return {
+                    **base,
+                    "status": "blocked",
+                    "reason": (
+                        "No real Sales Quotation exists for this client. "
+                        "Create the quotation record first."
+                    ),
+                }
+
+            quote_uuid = resolved["id"]
+
+        generated = await _artifact_generate_financial_proposal(
+            db,
+            quote_uuid,
+            conversation_id=conversation_id,
+        )
+
+        return {
+            **base,
+            "status": "executed",
+            "operation": (
+                "financial_proposal_artifacts_generated"
+            ),
+            "record": generated,
+            "external_send": False,
+        }
+
     return {
         **base,
         "status": "blocked",
@@ -79397,6 +79522,19 @@ async def _ceo_execution_layer(
         "If the request is only casual/general advice, handled=false."
     )
 
+    instructions += (
+        " ARTIFACT ENGINE v1.4.0 RULES: "
+        "Financial Proposal DOCX/PDF generation is available only through "
+        "generate_financial_proposal_artifacts and only from a real stored "
+        "Sales Quotation. Use this action only when the user explicitly asks "
+        "to create, generate, produce, download, or prepare the financial "
+        "proposal files. It creates internal attachments and never sends them "
+        "externally. If a quotation does not exist, report that the quotation "
+        "record must be created first. Never claim an artifact exists unless "
+        "the execution result is executed and contains real attachment IDs "
+        "or download URLs."
+    )
+
     planner_input = (
         "USER SOURCE:\n"
         + source_text[:30000]
@@ -79449,6 +79587,7 @@ async def _ceo_execution_layer(
                 action,
                 client_name,
                 source_text,
+                conversation_id=conversation_id,
             )
         except HTTPException as exc:
             result = {
@@ -79533,9 +79672,494 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.3.0",
-        "mode": "evidence_first_execution",
+        "version": "1.4.0",
+        "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
         "safety": snapshot["safety"],
+    }
+
+# ============================================================
+# ENCLAVE v1.4.0 - FINANCIAL PROPOSAL ARTIFACT ENGINE
+# ============================================================
+
+from .artifact_engine import (
+    build_financial_proposal_docx as _artifact_build_docx,
+    build_financial_proposal_pdf as _artifact_build_pdf,
+    safe_filename as _artifact_safe_filename,
+)
+
+_ARTIFACT_SUPPORTED_QUOTE_STATUSES = {
+    "draft",
+    "pending_approval",
+    "approved",
+    "active",
+    "accepted",
+    "won",
+}
+
+
+async def _artifact_financial_proposal_payload(
+    db: AsyncSession,
+    quotation_id,
+):
+    quote = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    q.id,
+                    q.opportunity_id,
+                    q.version,
+                    q.external_quote_number,
+                    q.status,
+                    q.subtotal_ex_vat,
+                    q.discount_amount,
+                    q.net_revenue_ex_vat,
+                    q.direct_cost,
+                    q.gross_profit,
+                    q.gross_margin_pct,
+                    q.vat_rate_pct,
+                    q.vat_amount,
+                    q.total_inc_vat,
+                    q.validity_date,
+                    q.payment_terms,
+                    q.scope_summary,
+                    q.approval_id,
+                    q.notes,
+                    q.created_at,
+                    q.updated_at,
+                    o.code AS opportunity_code,
+                    o.name AS opportunity_name,
+                    a.id AS account_id,
+                    a.code AS account_code,
+                    a.name AS client_name
+                FROM sales_quotations q
+                JOIN sales_opportunities o
+                  ON o.id=q.opportunity_id
+                JOIN sales_accounts a
+                  ON a.id=o.account_id
+                WHERE q.id=:quotation_id
+                """
+            ),
+            {"quotation_id": quotation_id},
+        )
+    ).mappings().first()
+
+    if quote is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Sales quotation not found",
+        )
+
+    if quote["status"] not in _ARTIFACT_SUPPORTED_QUOTE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Financial proposal artifacts are not available "
+                f"for quotation status {quote['status']}."
+            ),
+        )
+
+    lines = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    line_number,
+                    description,
+                    quantity,
+                    unit_price,
+                    net_amount_ex_vat,
+                    direct_cost,
+                    notes
+                FROM sales_quotation_lines
+                WHERE quotation_id=:quotation_id
+                ORDER BY line_number ASC
+                """
+            ),
+            {"quotation_id": quotation_id},
+        )
+    ).mappings().all()
+
+    if not lines:
+        raise HTTPException(
+            status_code=409,
+            detail="Quotation has no line items.",
+        )
+
+    company = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    legal_name_en,
+                    legal_name_ar,
+                    commercial_registration_no,
+                    city,
+                    country_code,
+                    base_currency,
+                    vat_status,
+                    vat_number,
+                    profile_metadata
+                FROM company_profiles
+                WHERE profile_key='primary'
+                LIMIT 1
+                """
+            )
+        )
+    ).mappings().first()
+
+    if company is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Primary Company Profile is missing.",
+        )
+
+    return {
+        "company": _ceo_exec_row(company),
+        "quotation": _ceo_exec_row(quote),
+        "lines": [
+            _ceo_exec_row(row)
+            for row in lines
+        ],
+    }
+
+
+async def _artifact_find_active(
+    db: AsyncSession,
+    module: str,
+    entity_type: str,
+    entity_id,
+    document_type: str,
+    description: str,
+):
+    rows = (
+        await db.execute(
+            select(HRAttachment).where(
+                HRAttachment.module == module,
+                HRAttachment.entity_type == entity_type,
+                HRAttachment.entity_id == entity_id,
+                HRAttachment.document_type == document_type,
+                HRAttachment.description == description,
+                HRAttachment.status == "active",
+            ).order_by(
+                HRAttachment.created_at.desc()
+            )
+        )
+    ).scalars().all()
+
+    for row in rows:
+        target = _hr_attachment_storage_path(row.storage_key)
+
+        if target.exists():
+            return row
+
+        row.status = "archived"
+        row.archived_by = "CEO Artifact Engine"
+        row.archived_at = datetime.now(timezone.utc)
+        row.archive_reason = (
+            "Artifact metadata existed but file was missing."
+        )
+
+    return None
+
+
+async def _artifact_store(
+    db: AsyncSession,
+    *,
+    module: str,
+    entity_type: str,
+    entity_id,
+    document_type: str,
+    title: str,
+    original_file_name: str,
+    mime_type: str,
+    content: bytes,
+    description: str,
+):
+    import hashlib
+    from pathlib import Path
+
+    entity_uuid = (
+        entity_id
+        if isinstance(entity_id, uuid.UUID)
+        else uuid.UUID(str(entity_id))
+    )
+
+    extension = Path(original_file_name).suffix.lower()
+    stored_file_name = f"{uuid.uuid4().hex}{extension}"
+    storage_key = (
+        f"{module}/{entity_type}/{entity_uuid}/{stored_file_name}"
+    )
+
+    target = _hr_attachment_storage_path(storage_key)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+
+    row = HRAttachment(
+        module=module,
+        entity_type=entity_type,
+        entity_id=entity_uuid,
+        employee_id=None,
+        document_type=document_type,
+        title=title[:300],
+        original_file_name=original_file_name[:255],
+        stored_file_name=stored_file_name,
+        storage_key=storage_key,
+        mime_type=mime_type,
+        file_extension=extension,
+        file_size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        confidentiality_level="confidential",
+        description=description,
+        uploaded_by="CEO Artifact Engine",
+        status="active",
+    )
+
+    db.add(row)
+    await db.flush()
+
+    return row, target
+
+
+async def _artifact_latest_quote_for_client(
+    db: AsyncSession,
+    client_name: str,
+):
+    account = await _ceo_exec_find_account(
+        db,
+        client_name,
+    )
+
+    if account is None:
+        return None
+
+    return (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    q.id,
+                    q.version,
+                    q.status,
+                    q.created_at
+                FROM sales_quotations q
+                JOIN sales_opportunities o
+                  ON o.id=q.opportunity_id
+                WHERE o.account_id=:account_id
+                  AND q.status IN (
+                    'draft',
+                    'pending_approval',
+                    'approved',
+                    'active',
+                    'accepted',
+                    'won'
+                  )
+                ORDER BY q.created_at DESC, q.version DESC
+                LIMIT 1
+                """
+            ),
+            {"account_id": account["id"]},
+        )
+    ).mappings().first()
+
+
+async def _artifact_generate_financial_proposal(
+    db: AsyncSession,
+    quotation_id,
+    conversation_id=None,
+):
+    payload = await _artifact_financial_proposal_payload(
+        db,
+        quotation_id,
+    )
+
+    quote = payload["quotation"]
+    client_name = quote["client_name"]
+    status_slug = str(quote["status"]).upper()
+
+    artifact_key = (
+        "financial_proposal"
+        f"|quotation={quote['id']}"
+        f"|version={quote['version']}"
+        f"|status={quote['status']}"
+    )
+
+    base_name = (
+        f"Enclave_Financial_Proposal_"
+        f"{_artifact_safe_filename(client_name)}_"
+        f"V{quote['version']}_{status_slug}"
+    )
+
+    definitions = [
+        {
+            "document_type": "financial_proposal_docx",
+            "title": (
+                f"Financial Proposal - {client_name} "
+                f"- V{quote['version']} (DOCX)"
+            ),
+            "file_name": f"{base_name}.docx",
+            "mime_type": (
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            "builder": _artifact_build_docx,
+        },
+        {
+            "document_type": "financial_proposal_pdf",
+            "title": (
+                f"Financial Proposal - {client_name} "
+                f"- V{quote['version']} (PDF)"
+            ),
+            "file_name": f"{base_name}.pdf",
+            "mime_type": "application/pdf",
+            "builder": _artifact_build_pdf,
+        },
+    ]
+
+    sales = []
+    conversation = []
+    written = []
+
+    try:
+        for definition in definitions:
+            sales_row = await _artifact_find_active(
+                db,
+                "sales",
+                "quotation",
+                quote["id"],
+                definition["document_type"],
+                artifact_key,
+            )
+
+            if sales_row is None:
+                content = definition["builder"](payload)
+
+                sales_row, target = await _artifact_store(
+                    db,
+                    module="sales",
+                    entity_type="quotation",
+                    entity_id=quote["id"],
+                    document_type=definition["document_type"],
+                    title=definition["title"],
+                    original_file_name=definition["file_name"],
+                    mime_type=definition["mime_type"],
+                    content=content,
+                    description=artifact_key,
+                )
+
+                written.append(target)
+
+            sales.append(_hr_attachment_payload(sales_row))
+
+            if conversation_id:
+                conversation_uuid = (
+                    conversation_id
+                    if isinstance(conversation_id, uuid.UUID)
+                    else uuid.UUID(str(conversation_id))
+                )
+
+                conversation_key = (
+                    artifact_key
+                    + "|conversation="
+                    + str(conversation_uuid)
+                )
+
+                conversation_row = await _artifact_find_active(
+                    db,
+                    "ceo_chat",
+                    "conversation",
+                    conversation_uuid,
+                    definition["document_type"],
+                    conversation_key,
+                )
+
+                if conversation_row is None:
+                    sales_target = _hr_attachment_storage_path(
+                        sales_row.storage_key
+                    )
+
+                    conversation_row, target = await _artifact_store(
+                        db,
+                        module="ceo_chat",
+                        entity_type="conversation",
+                        entity_id=conversation_uuid,
+                        document_type=definition["document_type"],
+                        title=definition["title"],
+                        original_file_name=definition["file_name"],
+                        mime_type=definition["mime_type"],
+                        content=sales_target.read_bytes(),
+                        description=conversation_key,
+                    )
+
+                    written.append(target)
+
+                conversation.append(
+                    _hr_attachment_payload(conversation_row)
+                )
+
+        await write_audit_log(
+            db,
+            actor="agent:ceo",
+            action="ceo.financial_proposal_artifacts.generated",
+            details={
+                "quotation_id": str(quote["id"]),
+                "quotation_version": quote["version"],
+                "quotation_status": quote["status"],
+                "client_name": client_name,
+                "conversation_id": (
+                    str(conversation_id)
+                    if conversation_id
+                    else None
+                ),
+                "sales_attachment_ids": [
+                    str(item["id"])
+                    for item in sales
+                ],
+                "conversation_attachment_ids": [
+                    str(item["id"])
+                    for item in conversation
+                ],
+                "external_send": False,
+            },
+        )
+
+        await db.commit()
+
+    except Exception:
+        await db.rollback()
+
+        for target in written:
+            try:
+                if target.exists():
+                    target.unlink()
+            except Exception:
+                pass
+
+        raise
+
+    return {
+        "quotation_id": str(quote["id"]),
+        "quotation_version": quote["version"],
+        "quotation_status": quote["status"],
+        "client_name": client_name,
+        "is_draft": (
+            quote["status"]
+            not in {
+                "approved",
+                "active",
+                "accepted",
+                "won",
+            }
+        ),
+        "sales_attachments": sales,
+        "conversation_attachments": conversation,
+        "download_urls": [
+            item["download_url"]
+            for item in conversation
+        ],
+        "external_send": False,
     }
