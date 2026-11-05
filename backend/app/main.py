@@ -1948,6 +1948,20 @@ async def chat_with_agent(
             "for another decision after successful completion.\n"
         )
 
+    # ENCLAVE v1.4.2 - USER-SUPPLIED COMMERCIAL EVIDENCE
+    if agent.slug == "ceo":
+        effective_instructions += (
+            "\n\nEXPLICIT COMMERCIAL EVIDENCE v1.4.2:\n"
+            "- A commercial value explicitly supplied by the user in the current "
+            "request is valid source evidence for an internal draft quotation.\n"
+            "- Do not require that value to already exist in the Opportunity or "
+            "be proven by an uploaded supplier/internal cost document unless an "
+            "approved policy or the user explicitly requires documentary proof.\n"
+            "- If execution evidence shows the quotation and artifacts were "
+            "created, report completion and stop; do not replace execution with "
+            "advisory choices.\n"
+        )
+
     # CEO ORCHESTRATION HOOK v1.1.1
     ceo_orchestration = None
     ceo_execution = None
@@ -79570,6 +79584,266 @@ async def _ceo_exec_action(
     }
 
 
+# ENCLAVE v1.4.2 - EXPLICIT COMMERCIAL INPUT AUTHORITY
+async def _ceo_exec_override_explicit_proposal_plan(
+    db: AsyncSession,
+    plan: dict,
+    source_text: str,
+):
+    import re
+
+    source = str(source_text or "")
+    folded = source.casefold()
+
+    proposal_intent = any(
+        marker in folded
+        for marker in (
+            "financial proposal",
+            "quotation",
+            "quote",
+            "\u0639\u0631\u0636 \u0645\u0627\u0644\u064a",
+            "\u0639\u0631\u0636 \u0633\u0639\u0631",
+        )
+    )
+
+    create_intent = any(
+        marker in folded
+        for marker in (
+            "create",
+            "prepare",
+            "generate",
+            "\u0627\u0646\u0634\u0626",
+            "\u0623\u0646\u0634\u0626",
+            "\u062c\u0647\u0632",
+            "\u062c\u0647\u0651\u0632",
+            "\u0633\u0648",
+            "\u0633\u0648\u0651",
+        )
+    )
+
+    if not proposal_intent or not create_intent:
+        return plan
+
+    normalized = source.translate(
+        str.maketrans(
+            "\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669",
+            "0123456789",
+        )
+    )
+
+    number = r"([0-9][0-9,]*(?:\.[0-9]+)?)"
+
+    def first(patterns):
+        for pattern in patterns:
+            match = re.search(
+                pattern,
+                normalized,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+            if match:
+                return match.group(1).strip()
+        return None
+
+    description = first(
+        (
+            r"(?:^|[\n\r\u2022])\s*[-*>\u2022]?\s*"
+            r"(?:description|service|\u0627\u0644\u0648\u0635\u0641|\u0627\u0644\u062e\u062f\u0645\u0629)"
+            r"\s*:\s*([^\r\n\u2022]+)",
+            r"(?:description|service)\s*:\s*([^\r\n\u2022]+)",
+        )
+    )
+
+    quantity_raw = first(
+        (
+            rf"(?:quantity|qty|\u0627\u0644\u0643\u0645\u064a\u0629)\s*:\s*{number}",
+        )
+    )
+
+    unit_price_raw = first(
+        (
+            rf"(?:unit\s*price|price\s*per\s*unit|"
+            rf"\u0633\u0639\u0631\s*\u0627\u0644\u0648\u062d\u062f\u0629|"
+            rf"\u0627\u0644\u0633\u0639\u0631\s*\u0644\u0644\u0648\u062d\u062f\u0629)"
+            rf"\s*:\s*{number}",
+        )
+    )
+
+    per_unit_cost_raw = first(
+        (
+            rf"(?:direct\s*cost\s*per\s*unit|"
+            rf"cost\s*per\s*unit|"
+            rf"\u0627\u0644\u062a\u0643\u0644\u0641\u0629\s*\u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629\s*\u0644\u0643\u0644\s*\u0648\u062d\u062f\u0629|"
+            rf"\u062a\u0643\u0644\u0641\u0629\s*\u0627\u0644\u0648\u062d\u062f\u0629)"
+            rf"\s*:\s*{number}",
+        )
+    )
+
+    line_total_cost_raw = first(
+        (
+            rf"(?:total\s*direct\s*cost|"
+            rf"direct\s*cost\s*total|"
+            rf"\u0627\u062c\u0645\u0627\u0644\u064a\s*\u0627\u0644\u062a\u0643\u0644\u0641\u0629\s*\u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629|"
+            rf"\u0625\u062c\u0645\u0627\u0644\u064a\s*\u0627\u0644\u062a\u0643\u0644\u0641\u0629\s*\u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629)"
+            rf"\s*:\s*{number}",
+        )
+    )
+
+    generic_cost_raw = first(
+        (
+            rf"(?:direct\s*cost|\u0627\u0644\u062a\u0643\u0644\u0641\u0629\s*\u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629)"
+            rf"\s*:\s*{number}",
+        )
+    )
+
+    if not (
+        description
+        and quantity_raw
+        and unit_price_raw
+        and (
+            per_unit_cost_raw
+            or line_total_cost_raw
+            or generic_cost_raw
+        )
+    ):
+        return plan
+
+    def number_value(value):
+        return float(
+            str(value).replace(",", "")
+        )
+
+    quantity = number_value(quantity_raw)
+    unit_price = number_value(unit_price_raw)
+
+    if per_unit_cost_raw and line_total_cost_raw:
+        return plan
+
+    if per_unit_cost_raw:
+        direct_cost = number_value(
+            per_unit_cost_raw
+        )
+        cost_basis = "per_unit"
+    elif line_total_cost_raw:
+        direct_cost = number_value(
+            line_total_cost_raw
+        )
+        cost_basis = "line_total"
+    else:
+        direct_cost = number_value(
+            generic_cost_raw
+        )
+        cost_basis = None
+
+    if quantity > 1 and cost_basis is None:
+        return plan
+
+    client_name = str(
+        plan.get(
+            "client_name_exact",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if (
+        not client_name
+        or client_name.casefold()
+        not in folded
+    ):
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT name
+                    FROM sales_accounts
+                    ORDER BY length(name) DESC, name ASC
+                    """
+                )
+            )
+        ).scalars().all()
+
+        matches = [
+            str(name)
+            for name in rows
+            if str(name).casefold() in folded
+        ]
+
+        if len(matches) == 1:
+            client_name = matches[0]
+
+    if not client_name:
+        return plan
+
+    wants_artifacts = any(
+        marker in folded
+        for marker in (
+            "docx",
+            "pdf",
+            "\u0645\u0644\u0641",
+            "\u0645\u0644\u0641\u0627\u062a",
+        )
+    )
+
+    actions = [
+        {
+            "type":
+                "create_commercial_proposal",
+            "agent_slug":
+                "finance",
+            "title":
+                "Create commercial proposal from explicit user inputs",
+            "data": {
+                "lines": [
+                    {
+                        "description":
+                            description,
+                        "quantity":
+                            quantity,
+                        "unit_price":
+                            unit_price,
+                        "direct_cost":
+                            direct_cost,
+                    }
+                ]
+            },
+        }
+    ]
+
+    if wants_artifacts:
+        actions.append(
+            {
+                "type":
+                    "generate_financial_proposal_artifacts",
+                "agent_slug":
+                    "finance",
+                "title":
+                    "Generate financial proposal DOCX and PDF",
+                "data":
+                    {},
+            }
+        )
+
+    return {
+        "handled": True,
+        "title":
+            "Explicit financial proposal execution",
+        "client_name_exact":
+            client_name,
+        "blocked_reason":
+            None,
+        "actions":
+            actions,
+        "routing":
+            "deterministic_explicit_commercial_inputs",
+        "user_input_is_authoritative":
+            True,
+        "attachment_evidence_required":
+            False,
+        "direct_cost_basis":
+            cost_basis,
+    }
+
+
 async def _ceo_execution_layer(
     db: AsyncSession,
     source_text: str,
@@ -79667,6 +79941,18 @@ async def _ceo_execution_layer(
         "If quantity is 1, the distinction is immaterial."
     )
 
+    instructions += (
+        " EXPLICIT COMMERCIAL INPUT AUTHORITY v1.4.2: Values explicitly stated "
+        "by the user in USER SOURCE are authoritative transaction evidence for "
+        "creating an internal draft quotation. They do NOT need to already exist "
+        "inside the Opportunity, and a supplier quote or uploaded cost document "
+        "is NOT mandatory unless the user or an approved policy explicitly "
+        "requires one. Never tell the user that an explicitly stated Direct Cost "
+        "must first be documented in Opportunity records. Attachments may provide "
+        "evidence, but they are optional when the user has directly supplied the "
+        "required commercial value and its basis."
+    )
+
     planner_input = (
         "USER SOURCE:\n"
         + source_text[:30000]
@@ -79678,6 +79964,8 @@ async def _ceo_execution_layer(
         )[:30000]
     )
 
+    planner_error = None
+
     try:
         response = await openai_client.responses.create(
             model=OPENAI_MODEL,
@@ -79687,17 +79975,25 @@ async def _ceo_execution_layer(
         )
         plan = _cf_json(response.output_text)
     except Exception as exc:
-        return {
+        planner_error = type(exc).__name__
+        plan = {}
+
+    plan = await _ceo_exec_override_explicit_proposal_plan(
+        db,
+        plan,
+        source_text,
+    )
+
+    if not plan.get("handled"):
+        result = {
             "handled": False,
-            "planner_error": type(exc).__name__,
             "artifact_generation": snapshot["artifact_generation"],
         }
 
-    if not plan.get("handled"):
-        return {
-            "handled": False,
-            "artifact_generation": snapshot["artifact_generation"],
-        }
+        if planner_error:
+            result["planner_error"] = planner_error
+
+        return result
 
     client_name = (
         str(plan.get("client_name_exact", "") or "").strip()
@@ -79804,7 +80100,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.4.1",
+        "version": "1.4.2",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

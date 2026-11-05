@@ -184,3 +184,13 @@ Tag: `v1.0.0`
 - validity_date, payment_terms and scope_summary remain optional; null approval fields are normal for a draft quotation.
 - No automatic Finance/Sales notification or review claim is allowed without an explicit user request and real execution evidence.
 - Existing Shory quotation and generated artifacts are preserved unchanged by this release.
+
+## v1.4.2 Explicit Commercial Input Authority Fix
+
+- Treats commercial values explicitly supplied by the user in the current request as authoritative source evidence for internal draft quotation creation.
+- Removes the false requirement that Direct Cost must already be stored in Opportunity records or proven by an uploaded supplier/internal cost document.
+- Adds a deterministic override for explicitly labeled proposal inputs such as Description, Quantity, Unit Price, and Direct Cost per unit / total.
+- When complete labeled inputs are present, the deterministic route replaces a planner-generated blocked/advisory plan with real create_commercial_proposal execution.
+- If DOCX/PDF are requested in the same command, artifact generation follows quotation creation automatically.
+- Existing v1.4.1 Direct Cost basis safety remains authoritative: quantity greater than one still requires an explicit per-unit or line-total basis.
+- No external sending is introduced.
