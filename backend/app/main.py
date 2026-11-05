@@ -2047,6 +2047,27 @@ async def chat_with_agent(
                       "lookup, and do not claim Sales/Finance notifications "
                       "were sent unless a real supported action proves it."
                 )
+
+                # CEO SUCCESS COMPLETION CONTRACT v1.4.5
+                effective_instructions = (
+                    effective_instructions
+                    + "\n\nCEO SUCCESS COMPLETION CONTRACT v1.4.5:\n"
+                      "- When the user's explicitly requested actions have all "
+                      "completed successfully according to authoritative execution "
+                      "evidence, report the completed result and any real artifact "
+                      "download links, then STOP.\n"
+                      "- Do NOT ask a follow-up question after successful completion.\n"
+                      "- Do NOT offer Finance/Sales review, internal review, approval, "
+                      "activation, A/B choices, modifications, next steps, or additional "
+                      "work unless the user explicitly requested that workflow.\n"
+                      "- Do NOT end a successful-completion response with a question mark.\n"
+                      "- approval_id=null is normal for an internal draft and is not "
+                      "a reason to ask for approval unless external activation/use was "
+                      "explicitly requested.\n"
+                      "- external_send=false means nothing was sent externally; report "
+                      "that fact if relevant, but do not ask whether to send or review it.\n"
+                )
+
                 orchestration_input = (
                     orchestration_input
                     + "\n\nAUTHORITATIVE SYSTEM EXECUTION EVIDENCE:\n"
@@ -79030,7 +79051,7 @@ async def _ceo_exec_action(
             "account_type": account_type,
             "source": "ceo_execution_engine",
             "notes": (
-                "Created by CEO Execution Engine v1.3.0. "
+                "Created by CEO Execution Engine. "
                 "No external communication performed."
             ),
         }
@@ -79477,7 +79498,7 @@ async def _ceo_exec_action(
                 payment_terms=payment_terms,
                 scope_summary=scope_summary,
                 notes=(
-                    "Created by CEO Execution Engine v1.4.1. "
+                    "Created by CEO Execution Engine. "
                     "External send was not performed."
                 ),
                 lines=lines,
