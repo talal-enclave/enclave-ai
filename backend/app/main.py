@@ -78157,6 +78157,31 @@ async def ceo_office_status(
         for row in approval_rows
     }
 
+    # CEO OFFICE SIGNAL ACCURACY v1.4.3
+    # Only explicit business work-items count as active office work.
+    real_task_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    a.slug,
+                    count(*) AS task_count
+                FROM tasks t
+                JOIN agents a
+                  ON a.id=t.agent_id
+                WHERE t.status IN ('pending', 'in_progress')
+                  AND COALESCE(t.payload->>'kind', '')='business_work_item'
+                GROUP BY a.slug
+                """
+            )
+        )
+    ).mappings().all()
+
+    task_map = {
+        row["slug"]: int(row["task_count"])
+        for row in real_task_rows
+    }
+
     offices = []
 
     for slug, (name_ar, short) in _CEO_OFFICES.items():

@@ -646,6 +646,234 @@ export default function Home() {
           color:#ffc2c8;border:1px solid rgba(255,109,122,.4);background:rgba(130,31,41,.2)
         }
         .foot{font-size:9px;color:#638b8e;text-align:center;margin-top:8px}
+        /* OFFICE ACTIVITY v1.4.3 */
+        .office{
+          position:relative;
+          min-height:132px;
+          overflow:hidden;
+          isolation:isolate;
+          padding:14px 13px 13px!important;
+          border:1px solid rgba(68,155,163,.25)!important;
+          border-radius:14px!important;
+          background:linear-gradient(145deg,rgba(7,44,52,.98),rgba(4,29,36,.98))!important;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.025),0 8px 24px rgba(0,0,0,.12)!important;
+          transition:border-color .24s ease,box-shadow .24s ease,background .24s ease;
+        }
+        .office::after{
+          content:"";
+          position:absolute;
+          inset:0;
+          z-index:-1;
+          pointer-events:none;
+          opacity:0;
+          background:radial-gradient(circle at 23% 68%,rgba(255,211,99,.15),transparent 43%);
+          transition:opacity .24s ease;
+        }
+        .office.active{
+          border-color:rgba(244,203,103,.82)!important;
+          background:linear-gradient(145deg,rgba(29,48,43,.98),rgba(8,38,41,.98))!important;
+          box-shadow:0 0 0 1px rgba(244,203,103,.12),0 0 18px rgba(235,190,79,.18),inset 0 0 26px rgba(235,190,79,.045)!important;
+        }
+        .office.active::after{opacity:1}
+        .office.waiting{
+          border-color:rgba(221,180,89,.60)!important;
+          box-shadow:0 0 0 1px rgba(221,180,89,.08),0 0 13px rgba(221,180,89,.10)!important;
+        }
+        .officeScene{
+          position:absolute;
+          left:7px;
+          bottom:7px;
+          width:48%;
+          height:76%;
+          opacity:.30;
+          filter:saturate(.48) brightness(.58);
+          pointer-events:none;
+          transition:opacity .24s ease,filter .24s ease;
+        }
+        .office.active .officeScene{
+          opacity:.95;
+          filter:saturate(.88) brightness(.96);
+        }
+        .office.waiting .officeScene{
+          opacity:.60;
+          filter:saturate(.70) brightness(.76);
+        }
+        .officeWallArt{
+          position:absolute;
+          left:59%;
+          top:6%;
+          width:17%;
+          height:18%;
+          border:2px solid rgba(135,161,157,.38);
+          background:rgba(80,112,108,.10);
+          box-shadow:inset 0 0 0 2px rgba(8,31,34,.65);
+        }
+        .officeShelf{
+          position:absolute;
+          left:7%;
+          top:4%;
+          width:31%;
+          height:23%;
+          border-bottom:3px solid rgba(81,115,110,.52);
+          display:flex;
+          align-items:flex-end;
+          gap:3px;
+          padding:0 4px 3px;
+        }
+        .officeShelf i{
+          display:block;
+          width:7px;
+          height:20px;
+          border:1px solid rgba(120,145,137,.34);
+          background:rgba(65,88,82,.56);
+          border-radius:1px;
+        }
+        .officeDesk{
+          position:absolute;
+          left:8%;
+          bottom:19%;
+          width:70%;
+          height:8%;
+          border-radius:2px;
+          background:linear-gradient(180deg,#486059,#283f3c);
+          box-shadow:0 5px 0 #1d3331;
+        }
+        .officeDesk::before,.officeDesk::after{
+          content:"";
+          position:absolute;
+          top:8px;
+          width:5px;
+          height:29px;
+          background:#243a38;
+        }
+        .officeDesk::before{left:7px}
+        .officeDesk::after{right:7px}
+        .officeLaptop{
+          position:absolute;
+          left:45%;
+          bottom:7px;
+          width:27px;
+          height:17px;
+          border:2px solid #314b49;
+          border-radius:2px;
+          background:#13292b;
+          transform:skew(-5deg);
+        }
+        .officeMug{
+          position:absolute;
+          left:34%;
+          bottom:8px;
+          width:7px;
+          height:8px;
+          border-radius:1px 1px 3px 3px;
+          background:#6e8175;
+        }
+        .officeChair{
+          position:absolute;
+          right:4%;
+          bottom:3%;
+          width:24px;
+          height:41px;
+          border-radius:9px 9px 4px 4px;
+          background:linear-gradient(160deg,#263f3e,#142c2e);
+          transform:skew(-6deg);
+        }
+        .officeChair::after{
+          content:"";
+          position:absolute;
+          left:9px;
+          bottom:-15px;
+          width:4px;
+          height:17px;
+          background:#183032;
+        }
+        .officePlant{
+          position:absolute;
+          left:4%;
+          bottom:28%;
+          width:17px;
+          height:22px;
+        }
+        .officePlant::after{
+          content:"";
+          position:absolute;
+          left:4px;
+          bottom:0;
+          width:10px;
+          height:9px;
+          border-radius:1px 1px 4px 4px;
+          background:#647469;
+        }
+        .officePlant span,.officePlant span::before,.officePlant span::after{
+          position:absolute;
+          content:"";
+          width:4px;
+          height:15px;
+          border-radius:80% 5% 80% 5%;
+          background:#5a7561;
+          transform-origin:bottom center;
+        }
+        .officePlant span{left:8px;bottom:7px;transform:rotate(-8deg)}
+        .officePlant span::before{left:-6px;bottom:0;transform:rotate(-38deg)}
+        .officePlant span::after{left:5px;bottom:0;transform:rotate(35deg)}
+        .officeLamp{
+          position:absolute;
+          left:21%;
+          bottom:31%;
+          width:38px;
+          height:50px;
+        }
+        .lampArm{
+          position:absolute;
+          left:16px;
+          bottom:0;
+          width:3px;
+          height:42px;
+          background:#405653;
+          transform:rotate(19deg);
+          transform-origin:bottom center;
+        }
+        .lampShade{
+          position:absolute;
+          left:21px;
+          top:1px;
+          width:18px;
+          height:11px;
+          border-radius:9px 9px 3px 3px;
+          background:#203b3a;
+          transform:rotate(17deg);
+        }
+        .lampBeam{
+          position:absolute;
+          left:20px;
+          top:10px;
+          width:34px;
+          height:42px;
+          clip-path:polygon(30% 0,70% 0,100% 100%,0 100%);
+          opacity:0;
+          background:linear-gradient(180deg,rgba(255,222,124,0),rgba(255,222,124,0));
+        }
+        .office.active .lampShade{
+          background:#efc45b;
+          box-shadow:0 0 8px rgba(255,214,103,.50),0 0 18px rgba(255,214,103,.16);
+        }
+        .office.active .lampBeam{
+          opacity:.70;
+          background:linear-gradient(180deg,rgba(255,222,124,.23),rgba(255,222,124,0));
+        }
+        .office.waiting .lampShade{
+          background:#b99852;
+          box-shadow:0 0 8px rgba(221,180,89,.20);
+        }
+        .office.waiting .lampBeam{
+          opacity:.25;
+          background:linear-gradient(180deg,rgba(230,188,92,.13),rgba(230,188,92,0));
+        }
+        .office > :not(.officeScene){
+          position:relative;
+          z-index:2;
+        }
+
         @media(max-width:1000px){.layout{grid-template-columns:1fr}}
         @media(max-width:600px){
           .shell{padding:10px}.grid{grid-template-columns:repeat(2,1fr)}
@@ -899,12 +1127,6 @@ export default function Home() {
                     remote?.status
                     || "idle";
 
-                  if (
-                    localBusy.includes(slug)
-                  ) {
-                    status = "active";
-                  }
-
                   return (
                     <div
                       key={slug}
@@ -912,6 +1134,30 @@ export default function Home() {
                         `office ${status === "active" ? "active" : status === "waiting_approval" ? "waiting" : ""}`
                       }
                     >
+                      <div
+                        className="officeScene"
+                        aria-hidden="true"
+                      >
+                        <div className="officeWallArt" />
+                        <div className="officeShelf">
+                          <i />
+                          <i />
+                          <i />
+                        </div>
+                        <div className="officePlant">
+                          <span />
+                        </div>
+                        <div className="officeDesk">
+                          <div className="officeLaptop" />
+                          <div className="officeMug" />
+                        </div>
+                        <div className="officeChair" />
+                        <div className="officeLamp">
+                          <span className="lampArm" />
+                          <span className="lampShade" />
+                          <span className="lampBeam" />
+                        </div>
+                      </div>
                       <div className="short">
                         {short}
                       </div>

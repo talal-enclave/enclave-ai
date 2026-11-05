@@ -194,3 +194,16 @@ Tag: `v1.0.0`
 - If DOCX/PDF are requested in the same command, artifact generation follows quotation creation automatically.
 - Existing v1.4.1 Direct Cost basis safety remains authoritative: quantity greater than one still requires an explicit per-unit or line-total basis.
 - No external sending is introduced.
+
+## v1.4.3 Office Activity UI & Signal Accuracy
+
+- Replaces generic department status cards with miniature-office cards.
+- Every department remains visible as an office, including idle departments.
+- Active offices use a calm warm-yellow lamp and subtle yellow glow.
+- Idle offices remain visible but unlit.
+- Waiting-approval offices use a restrained amber state.
+- Removes frontend keyword/localBusy forcing from department activity status.
+- Active task counts now include only pending/in-progress business_work_item records.
+- Excludes generic auto-chat, legacy CEO delegation and advisory task noise from office lighting.
+- Pending real approvals remain visible as waiting_approval.
+- No business records are changed by this release.
