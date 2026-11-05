@@ -207,3 +207,12 @@ Tag: `v1.0.0`
 - Excludes generic auto-chat, legacy CEO delegation and advisory task noise from office lighting.
 - Pending real approvals remain visible as waiting_approval.
 - No business records are changed by this release.
+
+## v1.4.4 Transient Office Execution Lighting
+
+- Lights inferred department offices immediately while a CEO command is actively processing.
+- Transient lighting requires both loading=true and localBusy membership.
+- Existing setLocalBusy([]) in the request finally block turns transient lighting off immediately when the request completes.
+- Persistent office status remains server-authoritative and still requires a real business_work_item or pending approval.
+- Adds a subtle warm-yellow lamp pulse during active request execution.
+- No backend or business data changes.

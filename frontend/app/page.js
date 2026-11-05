@@ -874,6 +874,30 @@ export default function Home() {
           z-index:2;
         }
 
+        /* TRANSIENT OFFICE EXECUTION v1.4.4 */
+        .office.transientActive .lampShade{
+          animation:officeLampPulse 1.35s ease-in-out infinite;
+        }
+        .office.transientActive{
+          animation:officeCardBreath 1.9s ease-in-out infinite;
+        }
+        @keyframes officeLampPulse{
+          0%,100%{
+            box-shadow:
+              0 0 7px rgba(255,214,103,.42),
+              0 0 15px rgba(255,214,103,.12);
+          }
+          50%{
+            box-shadow:
+              0 0 10px rgba(255,214,103,.60),
+              0 0 22px rgba(255,214,103,.20);
+          }
+        }
+        @keyframes officeCardBreath{
+          0%,100%{filter:brightness(1)}
+          50%{filter:brightness(1.025)}
+        }
+
         @media(max-width:1000px){.layout{grid-template-columns:1fr}}
         @media(max-width:600px){
           .shell{padding:10px}.grid{grid-template-columns:repeat(2,1fr)}
@@ -1127,11 +1151,19 @@ export default function Home() {
                     remote?.status
                     || "idle";
 
+                  const transientActive =
+                    loading
+                    && localBusy.includes(slug);
+
+                  if (transientActive) {
+                    status = "active";
+                  }
+
                   return (
                     <div
                       key={slug}
                       className={
-                        `office ${status === "active" ? "active" : status === "waiting_approval" ? "waiting" : ""}`
+                        `office ${status === "active" ? "active" : status === "waiting_approval" ? "waiting" : ""} ${transientActive ? "transientActive" : ""}`
                       }
                     >
                       <div
