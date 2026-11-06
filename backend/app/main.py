@@ -78950,6 +78950,20 @@ def _ceo_exec_tp_parse_labeled_sections(source_text: str):
     return result
 
 
+def _ceo_exec_tp_strip_artifact_directives(source_text):
+    """Remove only standalone output commands, preserving proposal content."""
+    import re
+    pattern = re.compile(
+        r"^[ \t]*(?:please[ \t]+)?generate[ \t]+"
+        r"(?:DOCX[ \t]+and[ \t]+PDF|PDF[ \t]+and[ \t]+DOCX)"
+        r"[ \t]*[.!]?[ \t]*$", re.IGNORECASE
+    )
+    return "\n".join(
+        line for line in str(source_text or "").splitlines()
+        if not pattern.fullmatch(line)
+    )
+
+
 async def _ceo_exec_override_explicit_technical_proposal_plan(db: AsyncSession, plan: dict, source_text: str):
     source = str(source_text or "")
     folded = source.casefold()
@@ -78957,7 +78971,7 @@ async def _ceo_exec_override_explicit_technical_proposal_plan(db: AsyncSession, 
         return plan
     if not any(x in folded for x in ("create", "prepare", "generate", "انشئ", "أنشئ", "جهز", "جهّز", "سو", "سوّ")):
         return plan
-    sections = _ceo_exec_tp_parse_labeled_sections(source)
+    sections = _ceo_exec_tp_parse_labeled_sections(_ceo_exec_tp_strip_artifact_directives(source))
     if not sections.get("scope_text"):
         return plan
     client_name = str(plan.get("client_name_exact", "") or "").strip()
@@ -78966,8 +78980,111 @@ async def _ceo_exec_override_explicit_technical_proposal_plan(db: AsyncSession, 
         matches = [str(name) for name in rows if str(name).casefold() in folded]
         if len(matches) == 1:
             client_name = matches[0]
+
     if not client_name:
         return plan
+
+    # v1.5.1 resume safety:
+    # Reuse an identical draft only when its Technical Proposal
+    # artifacts are incomplete. This prevents a retry of a failed
+    # artifact step from creating an accidental V2.
+    account = await _ceo_exec_tp_account(
+        db,
+        client_name,
+    )
+
+    reusable = None
+
+    if account is not None:
+        expected_title = (
+            sections.get("title")
+            or f"Technical Proposal - {client_name}"
+        )
+
+        reusable = (
+            await db.execute(
+                text(
+                    """
+                    SELECT tp.id, tp.version
+                    FROM sales_technical_proposals tp
+                    WHERE tp.account_id=:account_id
+                      AND tp.status='draft'
+                      AND tp.title=:title
+                      AND tp.scope_text=:scope_text
+                      AND tp.methodology_text
+                          IS NOT DISTINCT FROM :methodology_text
+                      AND tp.deliverables_text
+                          IS NOT DISTINCT FROM :deliverables_text
+                      AND tp.assumptions_text
+                          IS NOT DISTINCT FROM :assumptions_text
+                      AND tp.exclusions_text
+                          IS NOT DISTINCT FROM :exclusions_text
+                      AND tp.timeline_text
+                          IS NOT DISTINCT FROM :timeline_text
+                      AND (
+                        NOT EXISTS (
+                          SELECT 1
+                          FROM hr_attachments h
+                          WHERE h.module='sales'
+                            AND h.entity_type='technical_proposal'
+                            AND h.entity_id=tp.id
+                            AND h.document_type='technical_proposal_docx'
+                            AND h.status='active'
+                        )
+                        OR
+                        NOT EXISTS (
+                          SELECT 1
+                          FROM hr_attachments h
+                          WHERE h.module='sales'
+                            AND h.entity_type='technical_proposal'
+                            AND h.entity_id=tp.id
+                            AND h.document_type='technical_proposal_pdf'
+                            AND h.status='active'
+                        )
+                      )
+                    ORDER BY tp.version DESC, tp.created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "account_id": account["id"],
+                    "title": expected_title,
+                    "scope_text": sections.get("scope_text"),
+                    "methodology_text": sections.get("methodology_text"),
+                    "deliverables_text": sections.get("deliverables_text"),
+                    "assumptions_text": sections.get("assumptions_text"),
+                    "exclusions_text": sections.get("exclusions_text"),
+                    "timeline_text": sections.get("timeline_text"),
+                },
+            )
+        ).mappings().first()
+
+    if reusable is not None:
+        return {
+            "handled": True,
+            "title": "Resume existing Technical Proposal draft",
+            "client_name_exact": client_name,
+            "blocked_reason": None,
+            "actions": [
+                {
+                    "type": "generate_technical_proposal_artifacts",
+                    "agent_slug": "sales",
+                    "title": (
+                        "Generate missing Technical Proposal DOCX and PDF"
+                    ),
+                    "data": {
+                        "technical_proposal_id": str(
+                            reusable["id"]
+                        )
+                    },
+                }
+            ],
+            "routing": (
+                "deterministic_technical_proposal_resume_existing_draft"
+            ),
+            "external_send": False,
+        }
+
     actions = [{"type": "create_technical_proposal", "agent_slug": "sales", "title": "Create technical proposal draft", "data": sections}]
     if any(x in folded for x in ("docx", "pdf", "ملف", "ملفات", "generate", "أنشئ", "انشئ")):
         actions.append({"type": "generate_technical_proposal_artifacts", "agent_slug": "sales", "title": "Generate technical proposal DOCX and PDF", "data": {}})
@@ -79036,33 +79153,179 @@ async def _ceo_exec_tp_resolve(db: AsyncSession, client_name: str, proposal_id=N
     return (row, None) if row else (None, "No stored Technical Proposal exists for this client.")
 
 
-async def _ceo_exec_tp_find_attachment(db: AsyncSession, module, entity_type, entity_id, document_type):
-    return (await db.execute(text("SELECT id, original_file_name, mime_type, file_size_bytes FROM hr_attachments WHERE module=:module AND entity_type=:entity_type AND entity_id=:entity_id AND document_type=:document_type AND status='active' ORDER BY created_at DESC LIMIT 1"), {"module": module, "entity_type": entity_type, "entity_id": entity_id, "document_type": document_type})).mappings().first()
+
+async def _ceo_exec_tp_find_attachment(
+    db: AsyncSession,
+    module,
+    entity_type,
+    entity_id,
+    document_type,
+    file_name=None,
+):
+    return (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    original_file_name,
+                    mime_type,
+                    file_size_bytes,
+                    sha256
+                FROM hr_attachments
+                WHERE module=:module
+                  AND entity_type=:entity_type
+                  AND entity_id=:entity_id
+                  AND document_type=:document_type
+                  AND status='active'
+                  AND (
+                    CAST(:file_name AS TEXT) IS NULL
+                    OR original_file_name=CAST(:file_name AS TEXT)
+                  )
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {
+                "module": module,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "document_type": document_type,
+                "file_name": file_name,
+            },
+        )
+    ).mappings().first()
 
 
-async def _ceo_exec_tp_insert_attachment(db: AsyncSession, *, module, entity_type, entity_id, document_type, file_name, mime_type, extension, content):
-    import os as _os, uuid as _u
+async def _ceo_exec_tp_insert_attachment(
+    db: AsyncSession,
+    *,
+    module,
+    entity_type,
+    entity_id,
+    document_type,
+    file_name,
+    mime_type,
+    extension,
+    content,
+):
+    import hashlib as _hashlib
+    import os as _os
+    import uuid as _u
     from pathlib import Path as _P
+
     attachment_id = _u.uuid4()
     stored = _u.uuid4().hex + extension
-    storage_key = f"{module}/{entity_type}/{entity_id}/{stored}"
-    root = _P(_os.environ.get("HR_ATTACHMENTS_DIR", "/var/lib/talal-enclave/hr-attachments")).resolve()
+    storage_key = (
+        f"{module}/{entity_type}/{entity_id}/{stored}"
+    )
+
+    root = _P(
+        _os.environ.get(
+            "HR_ATTACHMENTS_DIR",
+            "/var/lib/talal-enclave/hr-attachments",
+        )
+    ).resolve()
+
     target = (root / storage_key).resolve()
+
     if root not in target.parents:
-        raise ValueError("Technical Proposal attachment path escapes configured root")
-    target.parent.mkdir(parents=True, exist_ok=True)
+        raise ValueError(
+            "Technical Proposal attachment path escapes configured root"
+        )
+
+    sha256 = _hashlib.sha256(content).hexdigest()
+
+    target.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     target.write_bytes(content)
-    await db.execute(text("""
-      INSERT INTO hr_attachments (
-        id,module,entity_type,entity_id,document_type,title,original_file_name,stored_file_name,
-        storage_key,mime_type,file_extension,file_size_bytes,confidentiality_level,uploaded_by,status
-      ) VALUES (
-        :id,:module,:entity_type,:entity_id,:document_type,:title,:original,:stored,:storage,
-        :mime,:ext,:size,'confidential','system','active'
-      )
-    """), {"id": attachment_id, "module": module, "entity_type": entity_type, "entity_id": entity_id, "document_type": document_type, "title": file_name, "original": file_name, "stored": stored, "storage": storage_key, "mime": mime_type, "ext": extension, "size": len(content)})
-    await db.commit()
-    return {"id": str(attachment_id), "file_name": file_name, "mime_type": mime_type, "file_size_bytes": len(content), "download_url": f"/api/hr/attachments/{attachment_id}/download"}
+
+    try:
+        await db.execute(
+            text(
+                """
+                INSERT INTO hr_attachments (
+                    id,
+                    module,
+                    entity_type,
+                    entity_id,
+                    document_type,
+                    title,
+                    original_file_name,
+                    stored_file_name,
+                    storage_key,
+                    mime_type,
+                    file_extension,
+                    file_size_bytes,
+                    sha256,
+                    confidentiality_level,
+                    uploaded_by,
+                    status
+                )
+                VALUES (
+                    :id,
+                    :module,
+                    :entity_type,
+                    :entity_id,
+                    :document_type,
+                    :title,
+                    :original,
+                    :stored,
+                    :storage,
+                    :mime,
+                    :ext,
+                    :size,
+                    :sha256,
+                    'confidential',
+                    'system',
+                    'active'
+                )
+                """
+            ),
+            {
+                "id": attachment_id,
+                "module": module,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "document_type": document_type,
+                "title": file_name,
+                "original": file_name,
+                "stored": stored,
+                "storage": storage_key,
+                "mime": mime_type,
+                "ext": extension,
+                "size": len(content),
+                "sha256": sha256,
+            },
+        )
+
+        await db.commit()
+
+    except Exception:
+        await db.rollback()
+
+        try:
+            target.unlink(
+                missing_ok=True
+            )
+        except Exception:
+            pass
+
+        raise
+
+    return {
+        "id": str(attachment_id),
+        "file_name": file_name,
+        "mime_type": mime_type,
+        "file_size_bytes": len(content),
+        "sha256": sha256,
+        "download_url": (
+            f"/api/hr/attachments/{attachment_id}/download"
+        ),
+    }
 
 
 async def _ceo_exec_tp_generate_artifacts(db: AsyncSession, client_name: str, conversation_id, proposal_id=None):
@@ -79080,14 +79343,14 @@ async def _ceo_exec_tp_generate_artifacts(db: AsyncSession, client_name: str, co
     artifacts = []
     for label, ext, mime, dtype, content in formats:
         file_name = base + ext
-        existing = await _ceo_exec_tp_find_attachment(db, "sales", "technical_proposal", proposal["id"], dtype)
+        existing = await _ceo_exec_tp_find_attachment(db, "sales", "technical_proposal", proposal["id"], dtype, file_name)
         if existing:
             sales_info = {"id": str(existing["id"]), "file_name": existing["original_file_name"], "mime_type": existing["mime_type"], "file_size_bytes": int(existing["file_size_bytes"]), "download_url": f"/api/hr/attachments/{existing['id']}/download"}
         else:
             sales_info = await _ceo_exec_tp_insert_attachment(db, module="sales", entity_type="technical_proposal", entity_id=proposal["id"], document_type=dtype, file_name=file_name, mime_type=mime, extension=ext, content=content)
         conversation_info = None
         if conversation_id:
-            existing_chat = await _ceo_exec_tp_find_attachment(db, "ceo_chat", "conversation", conversation_id, dtype)
+            existing_chat = await _ceo_exec_tp_find_attachment(db, "ceo_chat", "conversation", conversation_id, dtype, file_name)
             if existing_chat:
                 conversation_info = {"id": str(existing_chat["id"]), "file_name": existing_chat["original_file_name"], "mime_type": existing_chat["mime_type"], "file_size_bytes": int(existing_chat["file_size_bytes"]), "download_url": f"/api/hr/attachments/{existing_chat['id']}/download"}
             else:
@@ -80277,6 +80540,7 @@ async def _ceo_execution_layer(
                 conversation_id=conversation_id,
             )
         except HTTPException as exc:
+            await db.rollback()
             result = {
                 "type": str(action.get("type", "")),
                 "agent_slug": str(action.get("agent_slug", "ceo")),
@@ -80293,6 +80557,7 @@ async def _ceo_execution_layer(
                 ),
             }
         except Exception as exc:
+            await db.rollback()
             result = {
                 "type": str(action.get("type", "")),
                 "agent_slug": str(action.get("agent_slug", "ceo")),
@@ -80359,7 +80624,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.5.0",
+        "version": "1.5.1",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

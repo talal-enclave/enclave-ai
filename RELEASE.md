@@ -235,3 +235,15 @@ Tag: `v1.0.0`
 - Links generated files to the Technical Proposal record and the active CEO conversation.
 - Generated artifacts remain internal DRAFT outputs; external send remains disabled.
 - Existing Financial Proposal behavior, Office Activity UX, Shory V1/V2 and current attachments are preserved.
+
+## v1.5.1 Technical Proposal Artifact Resume Fix
+
+- Fixes Technical Proposal attachment persistence by computing and storing the required SHA-256 digest.
+- Cleans up a newly written artifact file if its database insert fails.
+- Rolls back the shared CEO execution database session when an action raises, preventing a blocked action from poisoning the final chat/audit response with `PendingRollbackError`.
+- Adds retry-safe Technical Proposal behavior: an identical incomplete draft is reused instead of creating an accidental new version.
+- Technical Proposal conversation attachment lookup now matches the generated filename, preventing a later version in the same conversation from reusing an older version's file.
+- Resumes the already-created Shory Technical Proposal V1 and generates its missing DOCX/PDF artifacts; no Shory Technical Proposal V2 is created by this repair.
+- Financial Proposal Engine, Office Activity UX, Shory financial quotations V1/V2 and all prior artifacts remain preserved.
+- Standalone DOCX/PDF generation commands are excluded from parsed proposal content before exact incomplete-draft matching; substantive section changes still require a new draft.
+- Explicitly type the optional attachment filename SQL parameter as TEXT for PostgreSQL/asyncpg, including NULL lookups.
