@@ -247,3 +247,13 @@ Tag: `v1.0.0`
 - Financial Proposal Engine, Office Activity UX, Shory financial quotations V1/V2 and all prior artifacts remain preserved.
 - Standalone DOCX/PDF generation commands are excluded from parsed proposal content before exact incomplete-draft matching; substantive section changes still require a new draft.
 - Explicitly type the optional attachment filename SQL parameter as TEXT for PostgreSQL/asyncpg, including NULL lookups.
+
+## v1.5.2 Unified Enclave Proposal Templates
+
+- Standardized technical and financial presentation against Shory technical v1.6 and the corrected Enclave financial proposal (FP-R4).
+- A single DOCX layout produces both DOCX and PDF using isolated LibreOffice Writer conversion.
+- Shared branding, logo, typography, green tables, page headers and confidentiality footers.
+- Preserves source scope, amounts, taxes, payment terms and statuses; missing technical sections are explicitly marked for confirmation.
+- Splits flattened scope/deliverable bullets without splitting hyphenated technical terms.
+- Template-aware attachment identity creates new T152 files on existing records; old attachments remain intact.
+- No automatic approvals, new commercial quotation versions, client-specific default commitments or external sending.

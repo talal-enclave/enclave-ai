@@ -1,0 +1,10 @@
+{
+  "template_version": "1.5.2",
+  "references": [
+    {"name": "Shory-Web-API-Penetration-Testing-Technical-Proposal-v1.6.pdf", "library_file_id": "libfile_1029c3d64c5c819197dd6f5028142f86", "role": "Technical section structure and reusable introductory wording"},
+    {"name": "Shory_Financial_Proposal_Corrected.pdf", "library_file_id": "libfile_1179ec49efe08191a9ff8ff241606c70", "role": "Financial section structure, commercial wording and brand asset"}
+  ],
+  "data_policy": "Recorded scope, commercial amounts, taxes, payment terms and statuses remain authoritative. Reference-client values, credentials, time commitments and acceptance terms are not defaulted into other engagements. Missing technical sections are explicitly marked for confirmation.",
+  "pdf_strategy": "PDF is exported from the same DOCX builder using LibreOffice Writer with an isolated temporary profile.",
+  "attachment_policy": "New T152 attachments coexist with old files on the existing proposal and quotation records. No business version increment, approval, or external send."
+}
