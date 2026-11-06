@@ -1962,6 +1962,16 @@ async def chat_with_agent(
             "advisory choices.\n"
         )
 
+    # ENCLAVE v1.5.0 - TECHNICAL PROPOSAL RESPONSE RULES
+    if agent.slug == "ceo":
+        effective_instructions += (
+            "\n\nTECHNICAL PROPOSAL ARTIFACT RULES v1.5.0:\n"
+            "- When technical proposal artifacts are generated, report the real Technical Proposal ID/version and DOCX/PDF download links.\n"
+            "- Generated Technical Proposal artifacts are DRAFT internal outputs.\n"
+            "- Never claim external send unless a separate supported action proves it.\n"
+            "- Never invent unsupported Scope, Methodology, Deliverables, Assumptions, Exclusions or Timeline content.\n"
+        )
+
     # CEO ORCHESTRATION HOOK v1.1.1
     ceo_orchestration = None
     ceo_execution = None
@@ -78242,6 +78252,8 @@ async def ceo_office_status(
 # ============================================================
 
 _CEO_EXEC_ACTIONS = {
+    "create_technical_proposal",
+    "generate_technical_proposal_artifacts",
     "get_client_state",
     "get_proposal_readiness",
     "get_finance_status",
@@ -78522,6 +78534,8 @@ async def _ceo_exec_snapshot(db: AsyncSession):
         "artifact_generation": {
             "financial_proposal_docx": True,
             "financial_proposal_pdf": True,
+            "technical_proposal_docx": True,
+            "technical_proposal_pdf": True,
             "invoice_print_page": True,
         },
         "safety": {
@@ -78905,6 +78919,181 @@ def _ceo_exec_account_type():
     if "customer" in allowed:
         return "customer"
     return None
+
+
+# ============================================================
+# ENCLAVE v1.5.0 - TECHNICAL PROPOSAL ARTIFACT ENGINE
+# ============================================================
+
+def _ceo_exec_tp_parse_labeled_sections(source_text: str):
+    import re as _r
+    source = str(source_text or "")
+    aliases = {
+        "title": ["Title", "Project Title", "العنوان", "عنوان المشروع"],
+        "scope_text": ["Scope", "Technical Scope", "نطاق العمل", "النطاق الفني"],
+        "methodology_text": ["Methodology", "Approach", "المنهجية", "منهجية العمل"],
+        "deliverables_text": ["Deliverables", "المخرجات", "التسليمات"],
+        "assumptions_text": ["Assumptions", "الافتراضات"],
+        "exclusions_text": ["Exclusions", "Out of Scope", "الاستثناءات", "خارج النطاق"],
+        "timeline_text": ["Timeline", "Schedule", "الجدول الزمني", "المدة"],
+    }
+    all_names = [name for names in aliases.values() for name in names]
+    alt = "|".join(sorted((_r.escape(x) for x in all_names), key=len, reverse=True))
+    keymap = {name.casefold(): key for key, names in aliases.items() for name in names}
+    pattern = _r.compile(rf"(?ims)^[ \t]*(?:[-*•]\s*)?(?P<label>{alt})[ \t]*:[ \t]*(?P<body>.*?)(?=^[ \t]*(?:[-*•]\s*)?(?:{alt})[ \t]*:|\Z)")
+    result = {}
+    for match in pattern.finditer(source):
+        key = keymap.get(match.group("label").strip().casefold())
+        body = match.group("body").strip()
+        if key and body:
+            result[key] = body
+    return result
+
+
+async def _ceo_exec_override_explicit_technical_proposal_plan(db: AsyncSession, plan: dict, source_text: str):
+    source = str(source_text or "")
+    folded = source.casefold()
+    if not any(x in folded for x in ("technical proposal", "technical offer", "عرض فني", "العرض الفني")):
+        return plan
+    if not any(x in folded for x in ("create", "prepare", "generate", "انشئ", "أنشئ", "جهز", "جهّز", "سو", "سوّ")):
+        return plan
+    sections = _ceo_exec_tp_parse_labeled_sections(source)
+    if not sections.get("scope_text"):
+        return plan
+    client_name = str(plan.get("client_name_exact", "") or "").strip()
+    if not client_name or client_name.casefold() not in folded:
+        rows = (await db.execute(text("SELECT name FROM sales_accounts ORDER BY length(name) DESC, name ASC"))).scalars().all()
+        matches = [str(name) for name in rows if str(name).casefold() in folded]
+        if len(matches) == 1:
+            client_name = matches[0]
+    if not client_name:
+        return plan
+    actions = [{"type": "create_technical_proposal", "agent_slug": "sales", "title": "Create technical proposal draft", "data": sections}]
+    if any(x in folded for x in ("docx", "pdf", "ملف", "ملفات", "generate", "أنشئ", "انشئ")):
+        actions.append({"type": "generate_technical_proposal_artifacts", "agent_slug": "sales", "title": "Generate technical proposal DOCX and PDF", "data": {}})
+    return {"handled": True, "title": "Explicit technical proposal execution", "client_name_exact": client_name, "blocked_reason": None, "actions": actions, "routing": "deterministic_explicit_technical_proposal", "external_send": False}
+
+
+async def _ceo_exec_tp_account(db: AsyncSession, client_name: str):
+    rows = (await db.execute(text("SELECT id, name, code FROM sales_accounts WHERE lower(name)=lower(:client_name) ORDER BY created_at ASC LIMIT 2"), {"client_name": client_name})).mappings().all()
+    return rows[0] if len(rows) == 1 else None
+
+
+async def _ceo_exec_tp_create_record(db: AsyncSession, client_name: str, source_text: str, conversation_id, data: dict):
+    import uuid as _u
+    account = await _ceo_exec_tp_account(db, client_name)
+    if account is None:
+        return {"status": "blocked", "reason": "Technical Proposal requires exactly one matching Sales Account."}
+    scope = str(data.get("scope_text", "") or "").strip()
+    if not scope:
+        return {"status": "blocked", "reason": "Technical Proposal requires Scope / Technical Scope."}
+    if not _ceo_exec_text_in_source(scope, source_text):
+        return {"status": "blocked", "reason": "Technical Proposal scope is not evidenced in USER SOURCE."}
+    optional = {}
+    for field in ("title", "methodology_text", "deliverables_text", "assumptions_text", "exclusions_text", "timeline_text"):
+        value = str(data.get(field, "") or "").strip()
+        optional[field] = value if value and _ceo_exec_text_in_source(value, source_text) else None
+    title = optional["title"] or f"Technical Proposal - {client_name}"
+    opps = (await db.execute(text("SELECT id FROM sales_opportunities WHERE account_id=:account_id ORDER BY created_at DESC LIMIT 2"), {"account_id": account["id"]})).scalars().all()
+    opportunity_id = opps[0] if len(opps) == 1 else None
+    version = int((await db.scalar(text("SELECT COALESCE(MAX(version),0)+1 FROM sales_technical_proposals WHERE account_id=:account_id"), {"account_id": account["id"]})) or 1)
+    proposal_id = _u.uuid4()
+    await db.execute(text("""
+        INSERT INTO sales_technical_proposals (
+          id, account_id, opportunity_id, source_conversation_id, version, status, title, scope_text,
+          methodology_text, deliverables_text, assumptions_text, exclusions_text, timeline_text, notes, created_by
+        ) VALUES (
+          :id, :account_id, :opportunity_id, :conversation_id, :version, 'draft', :title, :scope,
+          :methodology, :deliverables, :assumptions, :exclusions, :timeline, :notes, 'ceo_execution_engine'
+        )
+    """), {"id": proposal_id, "account_id": account["id"], "opportunity_id": opportunity_id, "conversation_id": conversation_id, "version": version, "title": title, "scope": scope, "methodology": optional["methodology_text"], "deliverables": optional["deliverables_text"], "assumptions": optional["assumptions_text"], "exclusions": optional["exclusions_text"], "timeline": optional["timeline_text"], "notes": "Created by CEO Execution Engine. External send was not performed."})
+    await db.commit()
+    return {"status": "executed", "operation": "technical_proposal_created", "record_type": "sales_technical_proposal", "record": {"id": str(proposal_id), "account_id": str(account["id"]), "account_name": account["name"], "opportunity_id": str(opportunity_id) if opportunity_id else None, "version": version, "status": "draft", "title": title, "scope_text": scope, **optional}, "external_send": False}
+
+
+def _ceo_exec_tp_safe_name(value):
+    import re as _r
+    return _r.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "Client")).strip("_") or "Client"
+
+
+async def _ceo_exec_tp_resolve(db: AsyncSession, client_name: str, proposal_id=None):
+    import uuid as _u
+    if proposal_id:
+        try:
+            proposal_id = _u.UUID(str(proposal_id))
+        except Exception:
+            return None, "technical_proposal_id is not a valid UUID."
+        row = (await db.execute(text("SELECT tp.*, a.name AS client_name FROM sales_technical_proposals tp JOIN sales_accounts a ON a.id=tp.account_id WHERE tp.id=:id"), {"id": proposal_id})).mappings().first()
+        if row is None:
+            return None, "The requested Technical Proposal does not exist."
+        if client_name and str(row["client_name"]).casefold() != str(client_name).casefold():
+            return None, "Technical Proposal does not belong to the requested client."
+        return row, None
+    account = await _ceo_exec_tp_account(db, client_name)
+    if account is None:
+        return None, "Technical Proposal requires exactly one matching Sales Account."
+    row = (await db.execute(text("SELECT tp.*, a.name AS client_name FROM sales_technical_proposals tp JOIN sales_accounts a ON a.id=tp.account_id WHERE tp.account_id=:account_id ORDER BY tp.version DESC, tp.created_at DESC LIMIT 1"), {"account_id": account["id"]})).mappings().first()
+    return (row, None) if row else (None, "No stored Technical Proposal exists for this client.")
+
+
+async def _ceo_exec_tp_find_attachment(db: AsyncSession, module, entity_type, entity_id, document_type):
+    return (await db.execute(text("SELECT id, original_file_name, mime_type, file_size_bytes FROM hr_attachments WHERE module=:module AND entity_type=:entity_type AND entity_id=:entity_id AND document_type=:document_type AND status='active' ORDER BY created_at DESC LIMIT 1"), {"module": module, "entity_type": entity_type, "entity_id": entity_id, "document_type": document_type})).mappings().first()
+
+
+async def _ceo_exec_tp_insert_attachment(db: AsyncSession, *, module, entity_type, entity_id, document_type, file_name, mime_type, extension, content):
+    import os as _os, uuid as _u
+    from pathlib import Path as _P
+    attachment_id = _u.uuid4()
+    stored = _u.uuid4().hex + extension
+    storage_key = f"{module}/{entity_type}/{entity_id}/{stored}"
+    root = _P(_os.environ.get("HR_ATTACHMENTS_DIR", "/var/lib/talal-enclave/hr-attachments")).resolve()
+    target = (root / storage_key).resolve()
+    if root not in target.parents:
+        raise ValueError("Technical Proposal attachment path escapes configured root")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    await db.execute(text("""
+      INSERT INTO hr_attachments (
+        id,module,entity_type,entity_id,document_type,title,original_file_name,stored_file_name,
+        storage_key,mime_type,file_extension,file_size_bytes,confidentiality_level,uploaded_by,status
+      ) VALUES (
+        :id,:module,:entity_type,:entity_id,:document_type,:title,:original,:stored,:storage,
+        :mime,:ext,:size,'confidential','system','active'
+      )
+    """), {"id": attachment_id, "module": module, "entity_type": entity_type, "entity_id": entity_id, "document_type": document_type, "title": file_name, "original": file_name, "stored": stored, "storage": storage_key, "mime": mime_type, "ext": extension, "size": len(content)})
+    await db.commit()
+    return {"id": str(attachment_id), "file_name": file_name, "mime_type": mime_type, "file_size_bytes": len(content), "download_url": f"/api/hr/attachments/{attachment_id}/download"}
+
+
+async def _ceo_exec_tp_generate_artifacts(db: AsyncSession, client_name: str, conversation_id, proposal_id=None):
+    from app.technical_artifact_engine import generate_technical_proposal_docx, generate_technical_proposal_pdf
+    proposal, reason = await _ceo_exec_tp_resolve(db, client_name, proposal_id)
+    if proposal is None:
+        return {"status": "blocked", "reason": reason}
+    payload = {"client_name": proposal["client_name"], "title": proposal["title"], "reference": "TP-" + str(proposal["id"]).split("-")[0].upper() + f"-V{proposal['version']}", "scope_text": proposal["scope_text"], "methodology_text": proposal["methodology_text"], "deliverables_text": proposal["deliverables_text"], "assumptions_text": proposal["assumptions_text"], "exclusions_text": proposal["exclusions_text"], "timeline_text": proposal["timeline_text"]}
+    safe = _ceo_exec_tp_safe_name(proposal["client_name"])
+    base = f"Enclave_Technical_Proposal_{safe}_V{proposal['version']}_DRAFT"
+    formats = [
+        ("DOCX", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "technical_proposal_docx", generate_technical_proposal_docx(payload)),
+        ("PDF", ".pdf", "application/pdf", "technical_proposal_pdf", generate_technical_proposal_pdf(payload)),
+    ]
+    artifacts = []
+    for label, ext, mime, dtype, content in formats:
+        file_name = base + ext
+        existing = await _ceo_exec_tp_find_attachment(db, "sales", "technical_proposal", proposal["id"], dtype)
+        if existing:
+            sales_info = {"id": str(existing["id"]), "file_name": existing["original_file_name"], "mime_type": existing["mime_type"], "file_size_bytes": int(existing["file_size_bytes"]), "download_url": f"/api/hr/attachments/{existing['id']}/download"}
+        else:
+            sales_info = await _ceo_exec_tp_insert_attachment(db, module="sales", entity_type="technical_proposal", entity_id=proposal["id"], document_type=dtype, file_name=file_name, mime_type=mime, extension=ext, content=content)
+        conversation_info = None
+        if conversation_id:
+            existing_chat = await _ceo_exec_tp_find_attachment(db, "ceo_chat", "conversation", conversation_id, dtype)
+            if existing_chat:
+                conversation_info = {"id": str(existing_chat["id"]), "file_name": existing_chat["original_file_name"], "mime_type": existing_chat["mime_type"], "file_size_bytes": int(existing_chat["file_size_bytes"]), "download_url": f"/api/hr/attachments/{existing_chat['id']}/download"}
+            else:
+                conversation_info = await _ceo_exec_tp_insert_attachment(db, module="ceo_chat", entity_type="conversation", entity_id=conversation_id, document_type=dtype, file_name=file_name, mime_type=mime, extension=ext, content=content)
+        artifacts.append({"format": label, "sales_attachment": sales_info, "conversation_attachment": conversation_info})
+    return {"status": "executed", "operation": "technical_proposal_artifacts_generated", "record_type": "sales_technical_proposal", "record": {"id": str(proposal["id"]), "client_name": proposal["client_name"], "version": int(proposal["version"]), "status": proposal["status"], "reference": payload["reference"]}, "artifacts": artifacts, "external_send": False}
 
 
 async def _ceo_exec_action(
@@ -79515,6 +79704,14 @@ async def _ceo_exec_action(
             "external_send": False,
         }
 
+    if action_type == "create_technical_proposal":
+        result = await _ceo_exec_tp_create_record(db, client_name, source_text, conversation_id, data)
+        return {**base, **result}
+
+    if action_type == "generate_technical_proposal_artifacts":
+        result = await _ceo_exec_tp_generate_artifacts(db, client_name, conversation_id, proposal_id=(data.get("technical_proposal_id") or data.get("proposal_id")))
+        return {**base, **result}
+
     if action_type == "generate_financial_proposal_artifacts":
         quotation_id = (
             str(
@@ -79999,6 +80196,16 @@ async def _ceo_execution_layer(
         "required commercial value and its basis."
     )
 
+    instructions += (
+        " TECHNICAL PROPOSAL ENGINE v1.5.0 RULES: "
+        "Use create_technical_proposal for a real internal DRAFT Technical Proposal record. "
+        "scope_text is mandatory and must be evidenced in USER SOURCE. Optional source-evidenced "
+        "fields are title, methodology_text, deliverables_text, assumptions_text, exclusions_text "
+        "and timeline_text. Never invent unsupported technical content. Use "
+        "generate_technical_proposal_artifacts to generate DOCX/PDF from a real stored Technical "
+        "Proposal. Generated files are internal DRAFT artifacts and this action never sends them externally."
+    )
+
     planner_input = (
         "USER SOURCE:\n"
         + source_text[:30000]
@@ -80025,6 +80232,12 @@ async def _ceo_execution_layer(
         plan = {}
 
     plan = await _ceo_exec_override_explicit_proposal_plan(
+        db,
+        plan,
+        source_text,
+    )
+
+    plan = await _ceo_exec_override_explicit_technical_proposal_plan(
         db,
         plan,
         source_text,
@@ -80146,7 +80359,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.4.2",
+        "version": "1.5.0",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

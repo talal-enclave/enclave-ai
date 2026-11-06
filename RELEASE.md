@@ -225,3 +225,13 @@ Tag: `v1.0.0`
 - After all explicitly requested actions complete successfully, the CEO must report the result and real artifact links, then stop.
 - No generic follow-up question, Finance/Sales review offer, approval prompt, A/B choice, next-step suggestion, or anything-else prompt is allowed after successful completion unless the user explicitly requested that workflow.
 - Existing quotations and generated artifacts are preserved unchanged.
+
+## v1.5.0 Technical Proposal Artifact Engine
+
+- Adds a real `sales_technical_proposals` record with per-client versioning.
+- Scope is mandatory; Title, Methodology, Deliverables, Assumptions, Exclusions and Timeline are optional and source-evidenced only.
+- Adds deterministic parsing for explicitly labeled Technical Proposal requests.
+- Adds DOCX and PDF Technical Proposal artifact generation with Arabic/English support.
+- Links generated files to the Technical Proposal record and the active CEO conversation.
+- Generated artifacts remain internal DRAFT outputs; external send remains disabled.
+- Existing Financial Proposal behavior, Office Activity UX, Shory V1/V2 and current attachments are preserved.
