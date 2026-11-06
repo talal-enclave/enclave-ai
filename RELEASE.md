@@ -257,3 +257,11 @@ Tag: `v1.0.0`
 - Splits flattened scope/deliverable bullets without splitting hyphenated technical terms.
 - Template-aware attachment identity creates new T152 files on existing records; old attachments remain intact.
 - No automatic approvals, new commercial quotation versions, client-specific default commitments or external sending.
+
+## v1.5.3 Shory Technical Proposal Content Completion
+
+- Populates the existing Shory Technical Proposal V1 draft's Methodology and Assumptions sections from the approved v1.6 wording.
+- Preserves proposal version 1, draft status, scope, deliverables, exclusions, timeline and all financial records.
+- Generates new technical DOCX and PDF artifacts with the T153 template suffix after content verification.
+- Refuses to overwrite different user-entered Methodology or Assumptions text.
+- Does not create a new commercial version, approve the proposal, or send anything externally.
