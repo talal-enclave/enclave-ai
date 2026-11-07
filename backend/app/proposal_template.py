@@ -17,7 +17,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-TEMPLATE_VERSION = '1.5.3'
+TEMPLATE_VERSION = '1.5.4'
 GREEN = '008F78'
 INK = '153442'
 FONT = 'DejaVu Sans'

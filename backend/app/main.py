@@ -79335,7 +79335,7 @@ async def _ceo_exec_tp_generate_artifacts(db: AsyncSession, client_name: str, co
         return {"status": "blocked", "reason": reason}
     payload = {"client_name": proposal["client_name"], "title": proposal["title"], "reference": "TP-" + str(proposal["id"]).split("-")[0].upper() + f"-V{proposal['version']}", "scope_text": proposal["scope_text"], "methodology_text": proposal["methodology_text"], "deliverables_text": proposal["deliverables_text"], "assumptions_text": proposal["assumptions_text"], "exclusions_text": proposal["exclusions_text"], "timeline_text": proposal["timeline_text"], "created_at": proposal["created_at"], "version": proposal["version"]}
     safe = _ceo_exec_tp_safe_name(proposal["client_name"])
-    base = f"Enclave_Technical_Proposal_{safe}_V{proposal['version']}_DRAFT_T153"
+    base = f"Enclave_Technical_Proposal_{safe}_V{proposal['version']}_DRAFT_T154"
     formats = [
         ("DOCX", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "technical_proposal_docx", generate_technical_proposal_docx(payload)),
         ("PDF", ".pdf", "application/pdf", "technical_proposal_pdf", generate_technical_proposal_pdf(payload)),
@@ -80624,7 +80624,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.5.3",
+        "version": "1.5.4",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
@@ -80938,13 +80938,13 @@ async def _artifact_generate_financial_proposal(
         f"|quotation={quote['id']}"
         f"|version={quote['version']}"
         f"|status={quote['status']}"
-        "|template=1.5.2"
+        "|template=1.5.4"
     )
 
     base_name = (
         f"Enclave_Financial_Proposal_"
         f"{_artifact_safe_filename(client_name)}_"
-        f"V{quote['version']}_{status_slug}_T152"
+        f"V{quote['version']}_{status_slug}_T154"
     )
 
     definitions = [

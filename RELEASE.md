@@ -265,3 +265,12 @@ Tag: `v1.0.0`
 - Generates new technical DOCX and PDF artifacts with the T153 template suffix after content verification.
 - Refuses to overwrite different user-entered Methodology or Assumptions text.
 - Does not create a new commercial version, approve the proposal, or send anything externally.
+
+## v1.5.4 Shory Proposal Final Alignment
+
+- Completes the existing Shory Technical Proposal V1 draft against the approved v1.6 scope, deliverables, methodology, timeline, assumptions and exclusions.
+- Makes the included remediation retest rules explicit: one round per assessment, 40-calendar-day remediation window, ten-business-day execution target after readiness, retest-only boundary, and separate pricing for extra or late rounds.
+- Defines controlled application-layer Red Teaming within the approved web/API scope while excluding enterprise Red Teaming activities outside that scope.
+- Aligns the current corrected Shory financial quotation's scope and payment wording while preserving historical quotation records and without creating a new quotation version or changing amounts, costs, margins or statuses.
+- Generates and verifies new T154 technical and financial DOCX/PDF artifacts, preserving all prior records and attachments.
+- Keeps the proposal and quotations internal drafts; approval and external sending remain disabled.
