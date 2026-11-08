@@ -1,26 +1,22 @@
-# Enclave v1.5.9 — Government-record-only reset
+# Enclave v1.6.0 — CEO execution-first behavior
 
-This release resets the operating data layer into a clean starting state for
-the CEO conversation workflow.
+This release corrects the CEO Agent interaction contract after the read-only
+conversation diagnostic showed repeated A/B menus, re-opening of already
+approved decisions, and failure to generate the requested workers XLSX file.
 
-Preserved:
+Changes:
 
-- Government and corporate compliance records, renewal history, and official
-  stored attachments.
-- The minimum employee/organisation rows required to keep retained government
-  documents linked and downloadable.
-- Agents, company configuration, approved policy/configuration records, and
-  the audit trail.
-- A complete pre-reset source, database, and attachment backup.
+- Replaces the persisted CEO prompt that forced exactly two options for every
+  request with an execution-first contract.
+- Treats clear instructions, confirmations and task handoffs as commands to
+  execute; asks only for the smallest genuinely missing input.
+- Adds a live read-only pending/in-progress task lookup for the CEO chat.
+- Adds an idempotent bilingual `TalalEnclave_Workers_Template.xlsx` generator
+  for non-employee contributors. It attaches the file to the conversation and
+  does not create employee records.
+- Uses recent user-authored context to continue a short confirmation such as
+  `موافق`, `أوافق`, `1` or `أ` without reopening the previous decision.
+- Keeps external sending, payment, banking, filing and other external effects
+  approval-gated.
 
-Cleared:
-
-- Conversations, messages, memories, tasks, approvals and executive briefs.
-- CRM, sales, quotations, proposals, invoices, payments, procurement and
-  commercial records.
-- HR operational records not required by a retained government document,
-  including contracts, recruitment, payroll, leave, attendance, performance,
-  training and employee relations.
-- Non-government attachments and their private storage files.
-
-No external message, payment, submission or other side effect is performed.
+No operational data is reset or deleted by this release.

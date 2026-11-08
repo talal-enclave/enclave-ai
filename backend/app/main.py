@@ -30,10 +30,17 @@ You are the CEO Agent for Talal Enclave, a private single-user AI system.
 Your job is executive decision support, strategic planning, prioritization,
 risk identification, cross-functional coordination and executive reporting.
 
-For material decisions:
-1. Present exactly two viable options.
-2. Explain the key tradeoff.
-3. Give a clear recommendation.
+Operate execution-first. When the user gives a clear instruction, confirmation,
+lookup request or request for a file/template, carry it out through the available
+internal system actions and return the result. Do not turn a clear instruction
+into a menu of choices. Ask only one precise question when a required input is
+actually missing, and create a follow-up task for a missing document when that
+is the useful next action.
+
+For a genuinely material decision that still needs a choice, options may be
+presented only when the user asks for alternatives or when two paths are
+materially different and neither can safely be selected from the instruction.
+Never repeat options after the user has already selected or approved a path.
 
 Be concise, commercially aware and action-oriented.
 Never execute an external side effect without the user's approval.
@@ -208,6 +215,11 @@ async def seed_agents():
 
             if existing is None:
                 db.add(Agent(**item))
+            elif item["slug"] == "ceo":
+                # Keep the persisted CEO prompt aligned with the execution-first
+                # contract. Older deployments stored the former "exactly two
+                # options" prompt and seed-only initialization left it active.
+                existing.system_prompt = item["system_prompt"]
 
         await db.commit()
 
@@ -1901,6 +1913,15 @@ async def chat_with_agent(
         }
     )
 
+    # Keep a compact user-only context for resolving confirmations such as
+    # "موافق" or "1".  Assistant prose is deliberately excluded from the
+    # evidence source so it cannot become an invented business fact.
+    recent_user_context = [
+        msg.content
+        for msg in history
+        if msg.role == "user" and msg.content
+    ][-6:]
+
     # CEO-ONLY EXECUTIVE INTERFACE v1.2.0
     if agent.slug == "ceo":
         effective_instructions = (
@@ -1910,6 +1931,10 @@ async def chat_with_agent(
               "- Never tell the user to go talk to another agent or open another agent workspace.\n"
               "- Coordinate Finance, Sales, HR, Legal, IT, Procurement, Marketing, Admin and Audit internally.\n"
               "- Return one consolidated executive result to the user.\n"
+              "- Treat a clear imperative, confirmation, lookup or file/template request as an instruction to execute, not as a request for options.\n"
+              "- A task handoff beginning with 'أبيك تكمل المهمة المعلقة التالية' is an execution command; inspect the live record and perform the next supported internal step.\n"
+              "- Do not present A/B choices, ask the user to choose a route, or reopen a decision that the user already approved.\n"
+              "- If execution is blocked, state the exact missing input in one short list and create a relevant internal follow-up task when supported.\n"
               "- If user approval is required, ask for it clearly.\n"
               "- Never claim a file, invoice, proposal, payment, message, filing or external action exists unless the system actually created or verified it.\n"
               "- If the current tools cannot execute a requested action or generate a requested file, state that limitation rather than pretending completion.\n"
@@ -2013,6 +2038,7 @@ async def chat_with_agent(
                 db,
                 orchestration_input,
                 conversation.id,
+                conversation_context=recent_user_context,
             )
 
             if ceo_execution:
@@ -2076,6 +2102,18 @@ async def chat_with_agent(
                       "explicitly requested.\n"
                       "- external_send=false means nothing was sent externally; report "
                       "that fact if relevant, but do not ask whether to send or review it.\n"
+                )
+
+                # CEO DIRECT EXECUTION CONTRACT v1.6.0
+                effective_instructions = (
+                    effective_instructions
+                    + "\n\nCEO DIRECT EXECUTION CONTRACT v1.6.0:\n"
+                      "- The user's latest clear instruction has priority over a generic planning style.\n"
+                      "- Do the internal work now when the execution evidence supports it: create the record, generate the requested template/file, retrieve the live task list, or coordinate the internal work order.\n"
+                      "- Use one concise result. Do not wrap the result in options, menus, tradeoff tables or a second approval request.\n"
+                      "- Only ask a question when a required field or source document is genuinely missing. Ask for the smallest exact missing input, not a choice between workflows.\n"
+                      "- If the user confirms a prior recommendation with words such as نعم، موافق، أوافق، 1 or أ، continue the previously selected path using the recent conversation context. Do not restart the decision.\n"
+                      "- A request for an Excel/Word/PDF template is an execution request. Generate and attach the file when a supported template action exists.\n"
                 )
 
                 orchestration_input = (
@@ -78254,6 +78292,8 @@ async def ceo_office_status(
 _CEO_EXEC_ACTIONS = {
     "create_technical_proposal",
     "generate_technical_proposal_artifacts",
+    "list_pending_tasks",
+    "generate_workers_template",
     "get_client_state",
     "get_proposal_readiness",
     "get_finance_status",
@@ -78266,6 +78306,204 @@ _CEO_EXEC_ACTIONS = {
     "create_commercial_proposal",
     "generate_financial_proposal_artifacts",
 }
+
+
+async def _ceo_exec_list_pending_tasks(db: AsyncSession):
+    """Return the live open task register for a CEO read-only lookup."""
+
+    rows = (
+        await db.execute(
+            select(Task)
+            .where(Task.status.in_(["pending", "in_progress"]))
+            .order_by(Task.created_at.desc())
+            .limit(200)
+        )
+    ).scalars().all()
+
+    agent_ids = {
+        row.agent_id
+        for row in rows
+        if row.agent_id is not None
+    }
+
+    agent_map = {}
+
+    if agent_ids:
+        agent_rows = (
+            await db.execute(
+                select(Agent).where(Agent.id.in_(agent_ids))
+            )
+        ).scalars().all()
+        agent_map = {
+            row.id: row.slug
+            for row in agent_rows
+        }
+
+    tasks = [
+        {
+            "id": str(row.id),
+            "title": row.title,
+            "description": row.description,
+            "status": row.status,
+            "priority": row.priority,
+            "agent_slug": agent_map.get(row.agent_id),
+            "due_at": row.due_at.isoformat() if row.due_at else None,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+
+    pending = sum(row["status"] == "pending" for row in tasks)
+    in_progress = sum(row["status"] == "in_progress" for row in tasks)
+
+    return {
+        "pending_count": pending,
+        "in_progress_count": in_progress,
+        "total_open_count": len(tasks),
+        "tasks": tasks,
+    }
+
+
+async def _ceo_exec_generate_workers_template(
+    db: AsyncSession,
+    conversation_id,
+):
+    """Create the bilingual non-employee workers XLSX template once per chat."""
+
+    if not conversation_id:
+        return {
+            "status": "blocked",
+            "reason": "A conversation is required to attach the template.",
+        }
+
+    document_type = "workers_template"
+    description = (
+        "CEO generated bilingual workers template for non-employee contributors"
+    )
+
+    existing = await _artifact_find_active(
+        db,
+        "ceo_chat",
+        "conversation",
+        conversation_id,
+        document_type,
+        description,
+    )
+
+    if existing is not None:
+        return {
+            "status": "executed",
+            "operation": "workers_template_reused",
+            "artifact": _hr_attachment_payload(existing),
+            "external_send": False,
+        }
+
+    try:
+        from io import BytesIO
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except Exception as exc:
+        return {
+            "status": "blocked",
+            "reason": "XLSX generation is unavailable: " + type(exc).__name__,
+        }
+
+    headers = [
+        "رقم / ID",
+        "الاسم الكامل / Full Name",
+        "الاسم المختصر / Preferred Name",
+        "المسمى الوظيفي / Role/Title",
+        "القسم / Department",
+        "حالة التعاقد / Engagement Status",
+        "تاريخ بدء العمل / Start Date",
+        "الساعات الأسبوعية المتوقعة / Weekly Hours",
+        "معدل الأجر / Rate (per hour/day/month)",
+        "رقم الهوية/جواز السفر / ID/Passport No.",
+        "الجنسية / Nationality",
+        "رقم الجوال / Mobile Phone",
+        "البريد الإلكتروني / Email",
+        "جهة اتصال للطوارئ (اسم+رقم) / Emergency Contact (Name & Phone)",
+        "المستندات المطلوبة / Required Documents",
+        "المستندات المستلمة (ن/ع) / Documents Received (Y/N)",
+        "حالة الانضمام / Onboarding Status",
+        "ملاحظات / Notes",
+    ]
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Workers - Non Employee"
+    sheet.append(headers)
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
+    sheet.row_dimensions[1].height = 32
+
+    header_fill = PatternFill("solid", fgColor="0B3D45")
+    header_font = Font(color="FFFFFF", bold=True)
+
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(
+            horizontal="center",
+            vertical="center",
+            wrap_text=True,
+        )
+
+    widths = [
+        10, 24, 22, 24, 18, 22, 16, 18, 22, 22, 16, 18, 28,
+        32, 28, 24, 20, 34,
+    ]
+
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    content = buffer.getvalue()
+    file_name = "TalalEnclave_Workers_Template.xlsx"
+
+    try:
+        row, _target = await _artifact_store(
+            db,
+            module="ceo_chat",
+            entity_type="conversation",
+            entity_id=conversation_id,
+            document_type=document_type,
+            title="Talal Enclave Workers Template (Non-Employee)",
+            original_file_name=file_name,
+            mime_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            content=content,
+            description=description,
+        )
+    except Exception:
+        await db.rollback()
+        return {
+            "status": "blocked",
+            "reason": "The XLSX attachment could not be stored.",
+        }
+
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="ceo.workers_template.generated",
+        details={
+            "conversation_id": str(conversation_id),
+            "attachment_id": str(row.id),
+            "file_name": file_name,
+            "employee_records_created": False,
+        },
+    )
+
+    return {
+        "status": "executed",
+        "operation": "workers_template_generated",
+        "artifact": _hr_attachment_payload(row),
+        "employee_records_created": False,
+        "external_send": False,
+    }
 
 
 def _ceo_exec_json_value(value):
@@ -79379,7 +79617,25 @@ async def _ceo_exec_action(
         return {
             **base,
             "status": "blocked",
-            "reason": "Action is not allowed by v1.3.0.",
+            "reason": "Action is not allowed by the CEO execution policy.",
+        }
+
+    if action_type == "list_pending_tasks":
+        return {
+            **base,
+            "status": "read_only",
+            "operation": "pending_tasks_listed",
+            "evidence": await _ceo_exec_list_pending_tasks(db),
+        }
+
+    if action_type == "generate_workers_template":
+        generated = await _ceo_exec_generate_workers_template(
+            db,
+            conversation_id,
+        )
+        return {
+            **base,
+            **generated,
         }
 
     if action_type == "get_finance_status":
@@ -80350,12 +80606,151 @@ async def _ceo_exec_override_explicit_proposal_plan(
     }
 
 
+def _ceo_exec_is_confirmation(source_text: str):
+    normalized = " ".join(
+        str(source_text or "")
+        .strip()
+        .casefold()
+        .split()
+    )
+    return normalized in {
+        "نعم",
+        "ايه",
+        "إيه",
+        "موافق",
+        "أوافق",
+        "اوافق",
+        "تم",
+        "نفذ",
+        "نفّذ",
+        "ابدأ",
+        "ابدا",
+        "1",
+        "أ",
+        "a",
+        "yes",
+        "approved",
+        "proceed",
+        "go ahead",
+    }
+
+
+def _ceo_exec_override_task_lookup_plan(plan: dict, source_text: str):
+    folded = str(source_text or "").casefold()
+    task_word = any(
+        marker in folded
+        for marker in ("مهام", "مهمة", "tasks", "task")
+    )
+    lookup_word = any(
+        marker in folded
+        for marker in (
+            "معلقة",
+            "معلّقة",
+            "المتبقية",
+            "المفتوحة",
+            "وش هي",
+            "ما هي",
+            "اعطني",
+            "أعطني",
+            "قائمة",
+            "list",
+            "pending",
+            "open",
+            "outstanding",
+        )
+    )
+
+    if not (task_word and lookup_word):
+        return plan
+
+    return {
+        "handled": True,
+        "title": "Live pending task register",
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "list_pending_tasks",
+                "agent_slug": "ceo",
+                "title": "Read current pending and in-progress tasks",
+                "data": {},
+            }
+        ],
+        "routing": "deterministic_task_lookup",
+    }
+
+
+def _ceo_exec_override_workers_template_plan(plan: dict, source_text: str):
+    folded = str(source_text or "").casefold()
+    template_word = any(
+        marker in folded
+        for marker in ("نموذج", "قالب", "template", "form")
+    )
+    spreadsheet_word = any(
+        marker in folded
+        for marker in (
+            "اكسل",
+            "إكسل",
+            "excel",
+            "xlsx",
+            "spreadsheet",
+        )
+    )
+    worker_word = any(
+        marker in folded
+        for marker in (
+            "الناس",
+            "يشتغل",
+            "موظف",
+            "موظفين",
+            "employee",
+            "worker",
+            "contributor",
+            "غير رسمي",
+            "مو رسمي",
+        )
+    )
+
+    if not (template_word and spreadsheet_word and worker_word):
+        return plan
+
+    return {
+        "handled": True,
+        "title": "Bilingual workers template",
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "generate_workers_template",
+                "agent_slug": "ceo",
+                "title": "Generate bilingual non-employee workers XLSX",
+                "data": {},
+            }
+        ],
+        "routing": "deterministic_workers_template",
+    }
+
+
 async def _ceo_execution_layer(
     db: AsyncSession,
     source_text: str,
     conversation_id,
+    conversation_context=None,
 ):
-    source_text = str(source_text or "").strip()
+    current_source = str(source_text or "").strip()
+    recent_context = [
+        str(item).strip()
+        for item in (conversation_context or [])
+        if str(item).strip()
+    ][-6:]
+
+    source_text = current_source
+
+    # A short confirmation refers to the immediately preceding user request.
+    # Rehydrate only user-authored context so assistant prose cannot become
+    # invented business evidence.
+    if _ceo_exec_is_confirmation(current_source) and recent_context:
+        source_text = "\n\n".join(recent_context + [current_source])
 
     if not source_text:
         return None
@@ -80405,6 +80800,12 @@ async def _ceo_execution_layer(
         "those fields. For create_commercial_proposal include exact line description, "
         "quantity, unit_price and direct_cost. Missing direct cost must "
         "remain missing and the executor will block. "
+        "Use list_pending_tasks for requests asking what pending, open or remaining "
+        "tasks exist. It is read-only and never needs approval. "
+        "Use generate_workers_template when the user asks for an Excel/XLSX "
+        "template to list people or contributors who work with Enclave but are "
+        "not formal employees; generate and attach the file immediately and do "
+        "not create employee records. "
         "Use get_finance_status for finance/billing status, "
         "get_accountability for named-person status. When the named person "
         "is Fahad Al-Anzi, treat him as an external commercial contributor "
@@ -80472,6 +80873,13 @@ async def _ceo_execution_layer(
     planner_input = (
         "USER SOURCE:\n"
         + source_text[:30000]
+        + "\n\nRECENT USER CONTEXT (use only to resolve a short confirmation; "
+          "do not treat assistant messages as evidence):\n"
+        + json.dumps(
+            recent_context,
+            ensure_ascii=False,
+            default=str,
+        )[:12000]
         + "\n\nLIVE SYSTEM SNAPSHOT:\n"
         + json.dumps(
             planner_context,
@@ -80502,6 +80910,16 @@ async def _ceo_execution_layer(
 
     plan = await _ceo_exec_override_explicit_technical_proposal_plan(
         db,
+        plan,
+        source_text,
+    )
+
+    plan = _ceo_exec_override_task_lookup_plan(
+        plan,
+        source_text,
+    )
+
+    plan = _ceo_exec_override_workers_template_plan(
         plan,
         source_text,
     )
@@ -80624,7 +81042,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.5.4",
+        "version": "1.6.0",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
