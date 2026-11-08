@@ -1,3 +1,15 @@
+# Enclave v1.6.7 — Live status evidence firewall
+
+This release closes the read-only false-success path shown when the CEO
+reported an open vacancy even though the HR dashboard showed zero.
+
+- Vacancy status questions now read the live `HRVacancy` table and return the
+  matching record IDs, matching open count and system-wide open count.
+- Status is never inferred from a previous CEO response, job-description draft
+  or task. Unsupported record lookups are blocked rather than hallucinated.
+
+---
+
 # Enclave v1.6.6 — CEO evidence firewall and verified HR vacancies
 
 This release closes the false-success path where the CEO response described a

@@ -2119,6 +2119,7 @@ async def chat_with_agent(
                       "- Activating employees means changing existing formal HREmployee records only. Departments and positions are not employee records, and never claim employee activation when the live employee count is zero.\n"
                       "- When the user provides a formal employee roster attachment and asks to add or activate those employees, import the actual HREmployee rows from that attachment and report their real IDs. Do not claim success from names in assistant text.\n"
                       "- Opening a vacancy means a real HRVacancy row linked to a live HR position and department, with its persisted ID and open status verified before claiming completion.\n"
+                      "- Vacancy status questions must use a live HRVacancy lookup; never report a vacancy count or status from assistant history, a draft or a task.\n"
                       "- For any direct create/update/register command without a supported write action, state blocked and explain the exact missing capability or field. Never convert a draft, task or explanation into a completed record.\n"
                 )
 
@@ -78437,6 +78438,7 @@ _CEO_EXEC_ACTIONS = {
     "generate_technical_proposal_artifacts",
     "create_organizational_structure",
     "create_hr_vacancy",
+    "get_hr_vacancy_state",
     "activate_existing_employees",
     "register_formal_employees_from_attachment",
     "list_pending_tasks",
@@ -79143,6 +79145,90 @@ async def _ceo_exec_create_hr_vacancy(
         "external_send": False,
         "job_board_published": False,
         "approval_required": False,
+    }
+
+async def _ceo_exec_get_hr_vacancy_state(
+    db: AsyncSession,
+    source_text: str,
+    data: dict | None = None,
+):
+    """Read vacancy status from the live HR vacancy register only."""
+
+    data = data or {}
+    title = str(
+        data.get("title")
+        or data.get("title_ar")
+        or data.get("title_en")
+        or ""
+    ).strip()
+    if not title:
+        return {
+            "status": "blocked",
+            "reason": "Vacancy title is required for a live status lookup.",
+        }
+
+    rows = (
+        await db.execute(
+            select(HRVacancy).order_by(HRVacancy.created_at.desc())
+        )
+    ).scalars().all()
+    normalized_title = _ceo_org_normalize(title)
+    matching = [
+        row
+        for row in rows
+        if (
+            normalized_title in _ceo_org_normalize(row.title_ar)
+            or normalized_title in _ceo_org_normalize(row.title_en)
+        )
+    ]
+    positions = (await db.execute(select(HRPosition))).scalars().all()
+    departments = (await db.execute(select(HRDepartment))).scalars().all()
+    position_map = {str(row.id): row for row in positions}
+    department_map = {str(row.id): row for row in departments}
+
+    records = []
+    for row in matching:
+        position = position_map.get(str(row.position_id)) if row.position_id else None
+        department = (
+            department_map.get(str(position.department_id))
+            if position and position.department_id
+            else None
+        )
+        records.append(
+            {
+                "id": str(row.id),
+                "position_id": str(row.position_id) if row.position_id else None,
+                "position_code": position.code if position else None,
+                "department_id": str(department.id) if department else None,
+                "department_code": department.code if department else None,
+                "title_ar": row.title_ar,
+                "title_en": row.title_en,
+                "status": row.status,
+                "openings": row.openings,
+                "employment_type": row.employment_type,
+                "work_location": row.work_location,
+                "description": row.description,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        )
+
+    open_records = [row for row in records if row["status"] == "open"]
+    return {
+        "status": "read_only",
+        "operation": "hr_vacancy_live_state_read",
+        "record_type": "hr_vacancy",
+        "verified": True,
+        "evidence": {
+            "query_title": title,
+            "found": bool(records),
+            "matching_record_count": len(records),
+            "matching_open_vacancy_count": len(open_records),
+            "system_open_vacancy_count": sum(
+                row.status == "open" for row in rows
+            ),
+            "records": records,
+        },
+        "external_send": False,
     }
 
 
@@ -81527,6 +81613,17 @@ async def _ceo_exec_action(
             **vacancy,
         }
 
+    if action_type == "get_hr_vacancy_state":
+        vacancy_state = await _ceo_exec_get_hr_vacancy_state(
+            db,
+            source_text,
+            data,
+        )
+        return {
+            **base,
+            **vacancy_state,
+        }
+
     if action_type == "activate_existing_employees":
         activation = await _ceo_exec_activate_existing_employees(
             db,
@@ -82788,6 +82885,109 @@ def _ceo_exec_override_employee_activation_plan(
     }
 
 
+def _ceo_exec_override_hr_vacancy_lookup_plan(
+    plan: dict,
+    source_text: str,
+):
+    """Route vacancy status questions to a live HR register read."""
+
+    import re
+
+    folded = str(source_text or "").casefold()
+    vacancy_word = any(
+        marker in folded
+        for marker in (
+            "شاغر",
+            "وظيفة شاغرة",
+            "vacancy",
+            "job opening",
+            "position requisition",
+            "ai platform",
+        )
+    )
+    lookup_word = any(
+        marker in folded
+        for marker in (
+            "وش وضع",
+            "ما وضع",
+            "حالة",
+            "هل تم",
+            "هل هو",
+            "هل الشاغر",
+            "موجود",
+            "تحقق",
+            "شيك",
+            "كم عدد",
+            "status",
+            "is it",
+            "check",
+            "show",
+            "list",
+        )
+    )
+    if not (vacancy_word and lookup_word):
+        return plan
+
+    title = ""
+    for candidate in ("AI Platform", "ai platform"):
+        if candidate.casefold() in folded:
+            title = candidate
+            break
+    if not title:
+        for action in (plan.get("actions") or []):
+            if not isinstance(action, dict):
+                continue
+            if str(action.get("type") or "").strip() == "get_hr_vacancy_state":
+                title = str(
+                    (action.get("data") or {}).get("title")
+                    or (action.get("data") or {}).get("title_ar")
+                    or ""
+                ).strip()
+                break
+    if not title:
+        match = re.search(
+            r"(?:شاغر|vacancy|position)\s*(?:باسم|for|named|:)?\s*"
+            r"[\"«']?([^\"»'\n،,:?]+)",
+            str(source_text or ""),
+            flags=re.IGNORECASE,
+        )
+        if match:
+            title = match.group(1).strip().strip(" ؟?")
+            if title.casefold() in {
+                "الشاغر",
+                "شاغر",
+                "vacancy",
+                "job",
+                "position",
+            }:
+                title = ""
+    if not title:
+        return {
+            "handled": True,
+            "title": "Live vacancy lookup blocked pending exact title",
+            "client_name_exact": None,
+            "blocked_reason": "Provide the exact vacancy title for a live lookup.",
+            "actions": [],
+            "routing": "deterministic_hr_vacancy_lookup_missing_title",
+        }
+
+    return {
+        "handled": True,
+        "title": "Read live HR vacancy status",
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "get_hr_vacancy_state",
+                "agent_slug": "hr",
+                "title": "Read vacancy status from the live HR register",
+                "data": {"title": title},
+            }
+        ],
+        "routing": "deterministic_hr_vacancy_live_lookup",
+    }
+
+
 def _ceo_exec_override_hr_vacancy_plan(
     plan: dict,
     source_text: str,
@@ -83022,6 +83222,90 @@ def _ceo_exec_is_mutation_request(source_text: str):
     return mutation_word and record_word
 
 
+def _ceo_exec_is_record_lookup_request(source_text: str):
+    """Identify record-status questions that require a live read action."""
+
+    folded = str(source_text or "").casefold()
+    question_form = any(
+        marker in folded
+        for marker in (
+            "وش",
+            "ما",
+            "هل",
+            "what",
+            "which",
+            "where",
+            "when",
+            "why",
+            "how",
+            "is it",
+            "status",
+            "check",
+            "show",
+            "list",
+        )
+    )
+    lookup_word = any(
+        marker in folded
+        for marker in (
+            "وش وضع",
+            "ما وضع",
+            "وش حالة",
+            "ما حالة",
+            "حالة",
+            "هل تم",
+            "هل هو",
+            "هل الشاغر",
+            "موجود",
+            "تحقق",
+            "شيك",
+            "كم عدد",
+            "status",
+            "is it",
+            "check",
+            "show",
+            "list",
+            "how many",
+        )
+    )
+    record_word = any(
+        marker in folded
+        for marker in (
+            "شاغر",
+            "وظيف",
+            "موظف",
+            "إدارة",
+            "ادارة",
+            "قسم",
+            "عميل",
+            "فرصة",
+            "عرض",
+            "فاتورة",
+            "دفعة",
+            "عقد",
+            "مرشح",
+            "رواتب",
+            "vacancy",
+            "job",
+            "employee",
+            "department",
+            "position",
+            "account",
+            "opportunity",
+            "quotation",
+            "invoice",
+            "payment",
+            "contract",
+            "candidate",
+            "payroll",
+            "record",
+        )
+    )
+    return lookup_word and record_word and (
+        question_form or not _ceo_exec_is_mutation_request(source_text)
+    )
+
+
 def _ceo_exec_override_workers_template_plan(plan: dict, source_text: str):
     folded = str(source_text or "").casefold()
     template_word = any(
@@ -83209,6 +83493,10 @@ async def _ceo_execution_layer(
         "description, work order or specialist response is not a vacancy. Do not "
         "publish to a job board or contact candidates unless a separate supported "
         "action proves it. "
+        "Use get_hr_vacancy_state when the user asks for a vacancy's status, "
+        "existence or open count. Read the live HRVacancy table and report the "
+        "matching record IDs and counts; never infer vacancy status from prior CEO "
+        "messages, a drafted job description or a task. "
         "Use activate_existing_employees when the user asks to activate or enable "
         "employees. This action may change only existing formal HREmployee rows "
         "with a safe inactive/onboarding status. If the live HR table is empty, "
@@ -83341,6 +83629,11 @@ async def _ceo_execution_layer(
         source_text,
     )
 
+    plan = _ceo_exec_override_hr_vacancy_lookup_plan(
+        plan,
+        source_text,
+    )
+
     plan = _ceo_exec_override_hr_vacancy_plan(
         plan,
         source_text,
@@ -83399,6 +83692,42 @@ async def _ceo_execution_layer(
                 ),
                 "actions": [],
                 "routing": "deterministic_unverified_mutation_block",
+            }
+
+    if _ceo_exec_is_record_lookup_request(source_text):
+        read_actions = {
+            "list_pending_tasks",
+            "get_hr_vacancy_state",
+            "get_finance_status",
+            "get_daily_report",
+            "get_accountability",
+            "get_client_state",
+            "get_proposal_readiness",
+        }
+        actions = [
+            item
+            for item in (plan.get("actions") or [])
+            if isinstance(item, dict)
+        ]
+        if (
+            not plan.get("handled")
+            or not actions
+            or any(
+                str(item.get("type") or "").strip()
+                not in read_actions
+                for item in actions
+            )
+        ):
+            plan = {
+                "handled": True,
+                "title": "Live record lookup blocked pending a supported read action",
+                "client_name_exact": None,
+                "blocked_reason": (
+                    "This status request was not matched to a supported live "
+                    "read action. No status was inferred from assistant history."
+                ),
+                "actions": [],
+                "routing": "deterministic_unverified_lookup_block",
             }
 
     if not plan.get("handled"):
@@ -83519,7 +83848,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.6",
+        "version": "1.6.7",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
