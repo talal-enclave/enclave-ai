@@ -1,3 +1,17 @@
+# Enclave v1.6.6 — CEO evidence firewall and verified HR vacancies
+
+This release closes the false-success path where the CEO response described a
+draft, task or specialist explanation as a completed HR or Finance record.
+
+- Explicit vacancy requests now create or reuse a live `HRVacancy` linked to a
+  real department position, verify the persisted ID and `open` status, and
+  report the record evidence.
+- If a direct create/update/register command has no supported database action,
+  the CEO returns `blocked` and does not delegate it as if it were completed.
+- Vacancy creation never publishes externally or contacts candidates.
+
+---
+
 # Enclave v1.6.5 — Formal employee roster import
 
 This release fixes the case where a user provides a completed employee roster

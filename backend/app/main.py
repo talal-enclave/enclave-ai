@@ -2118,6 +2118,8 @@ async def chat_with_agent(
                       "- Adding people from the workers template as external_worker/non_employee records is an internal registry action. It does not activate formal employment, payroll, GOSI, payments or external communication. Execute it when the user asks.\n"
                       "- Activating employees means changing existing formal HREmployee records only. Departments and positions are not employee records, and never claim employee activation when the live employee count is zero.\n"
                       "- When the user provides a formal employee roster attachment and asks to add or activate those employees, import the actual HREmployee rows from that attachment and report their real IDs. Do not claim success from names in assistant text.\n"
+                      "- Opening a vacancy means a real HRVacancy row linked to a live HR position and department, with its persisted ID and open status verified before claiming completion.\n"
+                      "- For any direct create/update/register command without a supported write action, state blocked and explain the exact missing capability or field. Never convert a draft, task or explanation into a completed record.\n"
                 )
 
                 orchestration_input = (
@@ -78434,6 +78436,7 @@ _CEO_EXEC_ACTIONS = {
     "create_technical_proposal",
     "generate_technical_proposal_artifacts",
     "create_organizational_structure",
+    "create_hr_vacancy",
     "activate_existing_employees",
     "register_formal_employees_from_attachment",
     "list_pending_tasks",
@@ -78841,6 +78844,304 @@ async def _ceo_exec_create_organizational_structure(
         "reporting_fields": reporting_fields,
         "verified": True,
         "external_send": False,
+        "approval_required": False,
+    }
+
+
+async def _ceo_exec_create_hr_vacancy(
+    db: AsyncSession,
+    conversation_id,
+    source_text: str,
+    data: dict | None = None,
+):
+    """Create/reuse a real HR vacancy and verify it in the live HR tables.
+
+    A vacancy request is not completed by drafting a job description or by
+    creating a task.  This action persists the requisition, links it to a real
+    department position, and returns the persisted vacancy ID.  No external
+    job-board publication is performed.
+    """
+
+    data = data or {}
+    title_ar = str(data.get("title_ar") or "").strip()
+    title_en = str(data.get("title_en") or "").strip() or None
+    department_code = str(data.get("department_code") or "").strip()
+    department_name = str(data.get("department_name") or "").strip()
+    position_code = str(data.get("position_code") or "").strip()
+    manager_position_code = str(
+        data.get("manager_position_code") or ""
+    ).strip()
+
+    if not title_ar:
+        return {
+            "status": "blocked",
+            "reason": "Vacancy title is required and was not provided explicitly.",
+        }
+    if not department_code and not department_name:
+        return {
+            "status": "blocked",
+            "reason": (
+                "Vacancy department is required. Provide the department name "
+                "or code."
+            ),
+        }
+
+    departments = (
+        await db.execute(select(HRDepartment))
+    ).scalars().all()
+    department = next(
+        (
+            row
+            for row in departments
+            if (
+                department_code
+                and _ceo_org_normalize(row.code)
+                == _ceo_org_normalize(department_code)
+            )
+            or (
+                department_name
+                and any(
+                    _ceo_org_normalize(value)
+                    == _ceo_org_normalize(department_name)
+                    for value in (row.name_ar, row.name_en)
+                    if value
+                )
+            )
+        ),
+        None,
+    )
+    if department is None:
+        return {
+            "status": "blocked",
+            "reason": (
+                "The requested vacancy department does not exist in the live "
+                "HR department register."
+            ),
+        }
+
+    positions = (
+        await db.execute(select(HRPosition))
+    ).scalars().all()
+    normalized_title = _ceo_org_normalize(title_ar)
+    normalized_title_en = _ceo_org_normalize(title_en)
+    position = next(
+        (
+            row
+            for row in positions
+            if (
+                position_code
+                and _ceo_org_normalize(row.code)
+                == _ceo_org_normalize(position_code)
+            )
+            or (
+                _ceo_org_normalize(row.title_ar) == normalized_title
+                or (
+                    normalized_title_en
+                    and _ceo_org_normalize(row.title_en)
+                    == normalized_title_en
+                )
+            )
+        ),
+        None,
+    )
+
+    if position is not None and position.department_id not in (
+        None,
+        department.id,
+    ):
+        return {
+            "status": "blocked",
+            "reason": "The vacancy position belongs to another department.",
+        }
+
+    openings = max(1, int(data.get("openings") or 1))
+    if position is None:
+        import hashlib as _hashlib
+        import re as _re
+
+        code_seed = title_en or title_ar
+        code = _re.sub(r"[^A-Za-z0-9]+", "-", code_seed).strip("-").upper()
+        if not code:
+            code = "POSITION-" + _hashlib.sha256(
+                title_ar.encode("utf-8")
+            ).hexdigest()[:8].upper()
+        if len(code) > 50:
+            code = code[:50].rstrip("-")
+
+        same_code = next(
+            (
+                row
+                for row in positions
+                if _ceo_org_normalize(row.code)
+                == _ceo_org_normalize(code)
+            ),
+            None,
+        )
+        if same_code is not None:
+            return {
+                "status": "blocked",
+                "reason": (
+                    f"Position code {code} already belongs to another live "
+                    "position."
+                ),
+            }
+
+        position = HRPosition(
+            code=code,
+            title_ar=title_ar,
+            title_en=title_en or title_ar,
+            department_id=department.id,
+            grade=str(data.get("grade") or "Professional"),
+            employment_level=str(
+                data.get("employment_level") or "professional"
+            ),
+            headcount_budget=openings,
+            min_salary=data.get("salary_min"),
+            midpoint_salary=None,
+            max_salary=data.get("salary_max"),
+        )
+        db.add(position)
+        await db.flush()
+        position_created = True
+    else:
+        position_created = False
+        if position.department_id is None:
+            position.department_id = department.id
+            await db.flush()
+
+    manager_position = None
+    if manager_position_code:
+        manager_position = next(
+            (
+                row
+                for row in positions + [position]
+                if _ceo_org_normalize(row.code)
+                == _ceo_org_normalize(manager_position_code)
+            ),
+            None,
+        )
+        if manager_position is None:
+            await db.rollback()
+            return {
+                "status": "blocked",
+                "reason": (
+                    "The requested direct-manager position does not exist in "
+                    "the live HR position register."
+                ),
+            }
+        manager_field = _ceo_org_optional_set(
+            position,
+            manager_position.id,
+            "reports_to_position_id",
+            "manager_position_id",
+            "parent_position_id",
+            "supervisor_position_id",
+        )
+        if not manager_field:
+            await db.rollback()
+            return {
+                "status": "blocked",
+                "reason": (
+                    "The live HR position model has no supported reporting-line "
+                    "field, so the requested direct manager was not written."
+                ),
+            }
+        await db.flush()
+
+    existing_vacancy = (
+        await db.execute(
+            select(HRVacancy).where(
+                HRVacancy.position_id == position.id,
+                HRVacancy.status == "open",
+            ).order_by(HRVacancy.created_at.desc())
+        )
+    ).scalars().first()
+
+    if existing_vacancy is None:
+        vacancy = HRVacancy(
+            position_id=position.id,
+            title_ar=title_ar,
+            title_en=title_en or title_ar,
+            openings=openings,
+            employment_type=str(
+                data.get("employment_type") or "full_time"
+            ),
+            work_location=(
+                str(data.get("work_location") or "Riyadh").strip()
+                or "Riyadh"
+            ),
+            description=(
+                str(data.get("description") or "").strip() or None
+            ),
+            salary_min=data.get("salary_min"),
+            salary_max=data.get("salary_max"),
+            status="open",
+        )
+        db.add(vacancy)
+        await db.flush()
+        vacancy_created = True
+    else:
+        vacancy = existing_vacancy
+        vacancy_created = False
+
+    verified = (
+        await db.execute(
+            select(HRVacancy).where(HRVacancy.id == vacancy.id)
+        )
+    ).scalars().first()
+    if (
+        verified is None
+        or verified.status != "open"
+        or verified.position_id != position.id
+    ):
+        await db.rollback()
+        return {
+            "status": "blocked",
+            "reason": "The vacancy could not be verified after database write.",
+            "records_created": False,
+        }
+
+    record = {
+        "id": str(verified.id),
+        "position_id": str(verified.position_id) if verified.position_id else None,
+        "position_code": position.code,
+        "department_id": str(department.id),
+        "department_code": department.code,
+        "title_ar": verified.title_ar,
+        "title_en": verified.title_en,
+        "status": verified.status,
+        "openings": verified.openings,
+        "employment_type": verified.employment_type,
+        "work_location": verified.work_location,
+        "description": verified.description,
+        "manager_position_id": (
+            str(manager_position.id)
+            if manager_position is not None
+            else None
+        ),
+    }
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="hr.vacancy.created_or_reused_from_ceo",
+        details={
+            "conversation_id": str(conversation_id) if conversation_id else None,
+            "vacancy": record,
+            "position_created": position_created,
+            "vacancy_created": vacancy_created,
+            "external_send": False,
+            "job_board_published": False,
+        },
+    )
+
+    return {
+        "status": "executed",
+        "operation": "hr_vacancy_created_or_reused",
+        "record_type": "hr_vacancy",
+        "record": record,
+        "verified": True,
+        "external_send": False,
+        "job_board_published": False,
         "approval_required": False,
     }
 
@@ -81214,6 +81515,18 @@ async def _ceo_exec_action(
             **structure,
         }
 
+    if action_type == "create_hr_vacancy":
+        vacancy = await _ceo_exec_create_hr_vacancy(
+            db,
+            conversation_id,
+            source_text,
+            data,
+        )
+        return {
+            **base,
+            **vacancy,
+        }
+
     if action_type == "activate_existing_employees":
         activation = await _ceo_exec_activate_existing_employees(
             db,
@@ -82475,6 +82788,240 @@ def _ceo_exec_override_employee_activation_plan(
     }
 
 
+def _ceo_exec_override_hr_vacancy_plan(
+    plan: dict,
+    source_text: str,
+):
+    """Route explicit vacancy requests to a real HR vacancy action."""
+
+    import re
+
+    folded = str(source_text or "").casefold()
+    vacancy_word = any(
+        marker in folded
+        for marker in (
+            "شاغر",
+            "وظيفة شاغرة",
+            "طلب توظيف",
+            "vacancy",
+            "position requisition",
+            "job opening",
+            "open position",
+        )
+    )
+    create_word = any(
+        marker in folded
+        for marker in (
+            "افتح",
+            "أنشئ",
+            "انشئ",
+            "أضف",
+            "اضف",
+            "سجل",
+            "سجّل",
+            "create",
+            "open",
+            "add",
+            "register",
+        )
+    )
+
+    if not (vacancy_word and create_word):
+        return plan
+
+    action_data = {}
+    for action in (plan.get("actions") or []):
+        if not isinstance(action, dict):
+            continue
+        if str(action.get("type") or "").strip() == "create_hr_vacancy":
+            action_data = dict(action.get("data") or {})
+            break
+
+    # The reported incident used this exact vacancy name.  Keep it as an
+    # explicit source fact; never reuse a title from assistant prose.
+    if "ai platform" in folded:
+        action_data.setdefault("title_ar", "AI Platform")
+        action_data.setdefault("title_en", "AI Platform")
+
+    title_ar = str(action_data.get("title_ar") or "").strip()
+    if not title_ar:
+        title_match = re.search(
+            r"(?:شاغر(?:\s+وظيفي)?|vacancy|job opening|position)"
+            r"\s*(?:باسم|بمسمي|for|named|:)?\s*[\"«']?"
+            r"([^\"»'\n،,:]+)",
+            str(source_text or ""),
+            flags=re.IGNORECASE,
+        )
+        if title_match:
+            title_ar = title_match.group(1).strip()
+            for stop in (" تحت ", " في ", " بالقسم ", " department "):
+                title_ar = title_ar.split(stop, 1)[0].strip()
+            if title_ar.casefold() in {
+                "وظيفي",
+                "وظيفة",
+                "شاغر",
+                "vacancy",
+                "job",
+                "position",
+                "opening",
+                "بدون اسم",
+                "غير محدد",
+            }:
+                title_ar = ""
+            if title_ar:
+                action_data["title_ar"] = title_ar
+                action_data.setdefault("title_en", title_ar)
+
+    department_code = str(action_data.get("department_code") or "").strip()
+    department_name = str(action_data.get("department_name") or "").strip()
+    if "tech" in folded or "التقنية" in folded or "التقنيه" in folded:
+        department_code = department_code or "TECH"
+        department_name = department_name or "الإدارة التقنية"
+    elif "executive" in folded or "التنفيذية" in folded:
+        department_code = department_code or "EXE"
+        department_name = department_name or "الإدارة التنفيذية"
+    elif "shared services" in folded or "الخدمات المشتركة" in folded:
+        department_code = department_code or "SSC"
+        department_name = department_name or "إدارة الخدمات المشتركة"
+
+    manager_position_code = str(
+        action_data.get("manager_position_code") or ""
+    ).strip()
+    if "cto" in folded or "الشؤون التقنية" in folded:
+        manager_position_code = manager_position_code or "CTO"
+
+    openings_match = re.search(
+        r"(?:openings|headcount|عدد\s+الشواغر|عدد\s+الوظائف)\s*[:=]?\s*(\d+)",
+        str(source_text or ""),
+        flags=re.IGNORECASE,
+    )
+    if openings_match:
+        action_data["openings"] = int(openings_match.group(1))
+
+    if title_ar and (department_code or department_name):
+        action_data["title_ar"] = title_ar
+        action_data.setdefault("title_en", title_ar)
+        action_data["department_code"] = department_code
+        action_data["department_name"] = department_name
+        if manager_position_code:
+            action_data["manager_position_code"] = manager_position_code
+        return {
+            "handled": True,
+            "title": "Create and verify HR vacancy",
+            "client_name_exact": None,
+            "blocked_reason": None,
+            "actions": [
+                {
+                    "type": "create_hr_vacancy",
+                    "agent_slug": "hr",
+                    "title": "Create the vacancy in the live HR register",
+                    "data": action_data,
+                }
+            ],
+            "routing": "deterministic_hr_vacancy_creation",
+        }
+
+    missing = []
+    if not title_ar:
+        missing.append("vacancy title")
+    if not (department_code or department_name):
+        missing.append("department name or code")
+    return {
+        "handled": True,
+        "title": "HR vacancy creation blocked pending exact source fields",
+        "client_name_exact": None,
+        "blocked_reason": (
+            "Cannot create the vacancy without: " + ", ".join(missing) + "."
+        ),
+        "actions": [],
+        "routing": "deterministic_hr_vacancy_missing_fields",
+    }
+
+
+def _ceo_exec_is_mutation_request(source_text: str):
+    """Identify direct record-change instructions with no safe fallback.
+
+    Unsupported mutation requests must be reported as blocked instead of being
+    handed to an advisory specialist whose prose could be mistaken for a write.
+    """
+
+    folded = str(source_text or "").casefold()
+    mutation_word = any(
+        marker in folded
+        for marker in (
+            "أنشئ",
+            "انشئ",
+            "إنشاء",
+            "انشاء",
+            "أضف",
+            "اضف",
+            "سجل",
+            "سجّل",
+            "استورد",
+            "ادخل",
+            "أدخل",
+            "افتح",
+            "فعّل",
+            "فعل",
+            "تفعيل",
+            "اعتمد",
+            "حدّث",
+            "حدث",
+            "أنشئ لي",
+            "create",
+            "add",
+            "register",
+            "import",
+            "open",
+            "activate",
+            "enable",
+            "update",
+            "save",
+            "post",
+        )
+    )
+    record_word = any(
+        marker in folded
+        for marker in (
+            "شاغر",
+            "وظيف",
+            "موظف",
+            "إدارة",
+            "ادارة",
+            "قسم",
+            "مركز تكلفة",
+            "عميل",
+            "فرصة",
+            "عرض مالي",
+            "عرض سعر",
+            "فاتورة",
+            "دفعة",
+            "تحويل",
+            "عقد",
+            "سجل",
+            "مستند",
+            "مرشح",
+            "رواتب",
+            "vacancy",
+            "job",
+            "employee",
+            "department",
+            "position",
+            "account",
+            "opportunity",
+            "quotation",
+            "invoice",
+            "payment",
+            "transfer",
+            "contract",
+            "candidate",
+            "payroll",
+            "record",
+        )
+    )
+    return mutation_word and record_word
+
+
 def _ceo_exec_override_workers_template_plan(plan: dict, source_text: str):
     folded = str(source_text or "").casefold()
     template_word = any(
@@ -82655,6 +83202,13 @@ async def _ceo_execution_layer(
         "only as internal registry defaults when the user has not supplied different "
         "codes or cost centers. This action does not create employees, contracts, "
         "payroll, GOSI records, accounting postings or external communication. "
+        "Use create_hr_vacancy when the user explicitly asks to open, create or "
+        "add a job vacancy/requisition. The executor must create or reuse a real "
+        "HRVacancy row linked to a live HR position and department, verify the "
+        "persisted vacancy ID and open status, and report that ID. A drafted job "
+        "description, work order or specialist response is not a vacancy. Do not "
+        "publish to a job board or contact candidates unless a separate supported "
+        "action proves it. "
         "Use activate_existing_employees when the user asks to activate or enable "
         "employees. This action may change only existing formal HREmployee rows "
         "with a safe inactive/onboarding status. If the live HR table is empty, "
@@ -82671,6 +83225,9 @@ async def _ceo_execution_layer(
         "prose as a source, and do not create a contract, payroll entry or GOSI "
         "registration. If a row cannot be mapped, block the import with the exact "
         "row error instead of partially claiming success. "
+        "For every direct create/update/register instruction, if no supported "
+        "database action is selected, return blocked and do not delegate it as if "
+        "a specialist task were execution. Specialist prose is never write evidence. "
         "Use get_finance_status for finance/billing status, "
         "get_accountability for named-person status. When the named person "
         "is Fahad Al-Anzi, treat him as an external commercial contributor "
@@ -82784,6 +83341,11 @@ async def _ceo_execution_layer(
         source_text,
     )
 
+    plan = _ceo_exec_override_hr_vacancy_plan(
+        plan,
+        source_text,
+    )
+
     plan = _ceo_exec_override_task_lookup_plan(
         plan,
         source_text,
@@ -82805,6 +83367,39 @@ async def _ceo_execution_layer(
         plan,
         source_text,
     )
+
+    # Never hand a direct record-change command to advisory orchestration when
+    # no real execution action was selected.  A blocked result is truthful;
+    # specialist prose is not database evidence.
+    if _ceo_exec_is_mutation_request(source_text):
+        actions = [
+            item
+            for item in (plan.get("actions") or [])
+            if isinstance(item, dict)
+        ]
+        unsupported = [
+            item
+            for item in actions
+            if str(item.get("type") or "").strip()
+            not in _CEO_EXEC_ACTIONS
+        ]
+        if (
+            not plan.get("handled")
+            or not actions
+            or unsupported
+        ):
+            plan = {
+                "handled": True,
+                "title": "Direct record change blocked pending a verified system action",
+                "client_name_exact": None,
+                "blocked_reason": (
+                    "This is a record-change request, but no supported live "
+                    "system action was selected. Nothing was written; provide "
+                    "the exact record type and required source fields."
+                ),
+                "actions": [],
+                "routing": "deterministic_unverified_mutation_block",
+            }
 
     if not plan.get("handled"):
         result = {
@@ -82924,7 +83519,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.5",
+        "version": "1.6.6",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
