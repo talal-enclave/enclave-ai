@@ -24,11 +24,20 @@ function Box({ title, value, sub }) {
 }
 
 export default function Recruitment() {
-  const [summary, setSummary] = useState({});
+  const [summary, setSummary] = useState({
+    open_vacancies: null,
+    total_candidates: null,
+    interview_stage: null,
+    offer_stage: null,
+    hired: null,
+  });
   const [vacancies, setVacancies] = useState([]);
   const [candidates, setCandidates] = useState([]);
   const [positions, setPositions] = useState([]);
   const [notice, setNotice] = useState("");
+  const [vacanciesLoaded, setVacanciesLoaded] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   const [vacancy, setVacancy] = useState({
     position_id: "",
@@ -70,22 +79,76 @@ export default function Recruitment() {
   }
 
   async function load() {
-    const [s, v, c, p] = await Promise.all([
+    setLoading(true);
+    const results = await Promise.allSettled([
       api("/api/hr/recruitment/summary"),
       api("/api/hr/recruitment/vacancies"),
       api("/api/hr/recruitment/candidates"),
       api("/api/hr/positions"),
     ]);
+    const [summaryResult, vacanciesResult, candidatesResult, positionsResult] = results;
+    const errors = [];
 
-    setSummary(s);
-    setVacancies(v);
-    setCandidates(c);
-    setPositions(p);
+    if (summaryResult.status === "fulfilled") {
+      setSummary((current) => ({ ...current, ...summaryResult.value }));
+    } else {
+      errors.push("تعذر التحقق من ملخص التوظيف");
+    }
+
+    if (vacanciesResult.status === "fulfilled") {
+      const liveVacancies = vacanciesResult.value;
+      setVacancies(liveVacancies);
+      setVacanciesLoaded(true);
+      const openCount = liveVacancies.filter(
+        (item) => item.is_open === true || String(item.status || "").toLowerCase() === "open"
+      ).length;
+      const summaryMatchesList =
+        summaryResult.status === "fulfilled" &&
+        Number(summaryResult.value.open_vacancies) === openCount;
+      setSummary((current) => ({
+        ...current,
+        open_vacancies: summaryMatchesList ? openCount : null,
+        vacancy_record_count: liveVacancies.length,
+        vacancy_consistency: summaryMatchesList ? "verified" : "conflict",
+      }));
+      if (!summaryMatchesList && summaryResult.status === "fulfilled") {
+        errors.push("تعارض في بيانات الشواغر؛ تم إيقاف عرض الرقم غير المتطابق");
+      }
+    } else {
+      setVacancies([]);
+      setVacanciesLoaded(false);
+      setSummary((current) => ({ ...current, open_vacancies: null }));
+      errors.push("تعذر التحقق من سجل الشواغر");
+    }
+
+    if (candidatesResult.status === "fulfilled") {
+      setCandidates(candidatesResult.value);
+    } else {
+      setCandidates([]);
+      errors.push("تعذر التحقق من المرشحين");
+    }
+
+    if (positionsResult.status === "fulfilled") {
+      setPositions(positionsResult.value);
+    } else {
+      setPositions([]);
+      errors.push("تعذر التحقق من المناصب المعتمدة");
+    }
+
+    setLastUpdated(new Date().toISOString());
+    setNotice(errors.join(" — "));
+    setLoading(false);
   }
 
   useEffect(() => {
     load();
+    const timer = setInterval(load, 30000);
+    return () => clearInterval(timer);
   }, []);
+
+  function metricValue(value) {
+    return value === null || value === undefined ? "—" : value;
+  }
 
   async function addVacancy(e) {
     e.preventDefault();
@@ -312,6 +375,15 @@ export default function Recruitment() {
           </div>
 
           <div>
+            <button
+              className="btn primary"
+              type="button"
+              onClick={load}
+              disabled={loading}
+              style={{marginLeft:8}}
+            >
+              {loading ? "جارٍ التحقق..." : "تحديث البيانات"}
+            </button>
             <a href="/hr">مساحة HR</a>{" "}
             <a
               href="/hr/recruitment/intelligence"
@@ -332,27 +404,27 @@ export default function Recruitment() {
         <section className="metrics">
           <Box
             title="الشواغر المفتوحة"
-            value={summary.open_vacancies || 0}
+            value={metricValue(summary.open_vacancies)}
             sub="Open Vacancies"
           />
           <Box
             title="إجمالي المرشحين"
-            value={summary.total_candidates || 0}
+            value={metricValue(summary.total_candidates)}
             sub="Candidates"
           />
           <Box
             title="مرحلة المقابلة"
-            value={summary.interview_stage || 0}
+            value={metricValue(summary.interview_stage)}
             sub="Interview"
           />
           <Box
             title="مرحلة العرض"
-            value={summary.offer_stage || 0}
+            value={metricValue(summary.offer_stage)}
             sub="Offer"
           />
           <Box
             title="تم التعيين"
-            value={summary.hired || 0}
+            value={metricValue(summary.hired)}
             sub="Hired"
           />
         </section>
@@ -600,7 +672,13 @@ export default function Recruitment() {
         <section className="panel">
           <h2>الشواغر</h2>
 
-          {vacancies.length ? (
+          <div className="muted" style={{marginBottom:12}}>
+            {lastUpdated
+              ? `آخر تحقق مباشر: ${new Date(lastUpdated).toLocaleString("ar-SA")}`
+              : "لم يكتمل التحقق المباشر بعد"}
+          </div>
+
+          {vacanciesLoaded && vacancies.length ? (
             <table>
               <thead>
                 <tr>
@@ -631,9 +709,13 @@ export default function Recruitment() {
                 ))}
               </tbody>
             </table>
-          ) : (
+          ) : vacanciesLoaded ? (
             <div className="muted">
               لا توجد شواغر حتى الآن.
+            </div>
+          ) : (
+            <div className="muted">
+              تعذر التحقق من الشواغر؛ لم يتم استبدالها بصفر.
             </div>
           )}
         </section>

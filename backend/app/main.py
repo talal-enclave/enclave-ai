@@ -2183,6 +2183,15 @@ async def chat_with_agent(
                 "Model returned no text"
             )
 
+        # The model may explain an executed action, but it is never the source
+        # of truth for a handled system action.  Use the deterministic evidence
+        # renderer whenever the execution layer produced actions, so a generic
+        # model sentence cannot override a live blocked/read-only result.
+        if agent.slug == "ceo" and ceo_execution:
+            evidence_answer = _ceo_exec_truth_response(ceo_execution)
+            if evidence_answer:
+                answer = evidence_answer
+
     except Exception as exc:
         await db.rollback()
 
@@ -5099,6 +5108,63 @@ VALID_CANDIDATE_STAGES = {
 }
 
 
+def _hr_recruitment_vacancy_record(row):
+    """Return the canonical vacancy representation shared by HR and CEO."""
+
+    status_raw = str(getattr(row, "status", "") or "").strip()
+    status = status_raw.casefold()
+    return {
+        "id": str(row.id),
+        "position_id": (
+            str(row.position_id)
+            if row.position_id else None
+        ),
+        "title_ar": row.title_ar,
+        "title_en": row.title_en,
+        "status": status,
+        "status_raw": status_raw,
+        "is_open": status == "open",
+        "openings": row.openings,
+        "employment_type": row.employment_type,
+        "work_location": row.work_location,
+        "description": row.description,
+        "salary_min": (
+            float(row.salary_min)
+            if row.salary_min is not None else None
+        ),
+        "salary_max": (
+            float(row.salary_max)
+            if row.salary_max is not None else None
+        ),
+        "created_at": (
+            row.created_at.isoformat()
+            if row.created_at else None
+        ),
+    }
+
+
+async def _hr_recruitment_vacancy_snapshot(db: AsyncSession):
+    """Read one canonical live vacancy snapshot for every consumer."""
+
+    result = await db.execute(
+        select(HRVacancy)
+        .order_by(HRVacancy.created_at.desc())
+    )
+    records = [
+        _hr_recruitment_vacancy_record(row)
+        for row in result.scalars().all()
+    ]
+    open_records = [row for row in records if row["is_open"]]
+    return {
+        "records": records,
+        "open_records": open_records,
+        "record_count": len(records),
+        "open_vacancy_count": len(open_records),
+        "source": "HRVacancy",
+        "snapshot_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @app.post("/api/hr/recruitment/vacancies")
 async def recruitment_create_vacancy(
     request: HRVacancyCreateRequest,
@@ -5149,38 +5215,8 @@ async def recruitment_create_vacancy(
 async def recruitment_list_vacancies(
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(HRVacancy)
-        .order_by(HRVacancy.created_at.desc())
-    )
-
-    rows = result.scalars().all()
-
-    return [
-        {
-            "id": str(x.id),
-            "position_id": (
-                str(x.position_id)
-                if x.position_id else None
-            ),
-            "title_ar": x.title_ar,
-            "title_en": x.title_en,
-            "status": x.status,
-            "openings": x.openings,
-            "employment_type": x.employment_type,
-            "work_location": x.work_location,
-            "description": x.description,
-            "salary_min": (
-                float(x.salary_min)
-                if x.salary_min is not None else None
-            ),
-            "salary_max": (
-                float(x.salary_max)
-                if x.salary_max is not None else None
-            ),
-        }
-        for x in rows
-    ]
+    snapshot = await _hr_recruitment_vacancy_snapshot(db)
+    return snapshot["records"]
 
 
 @app.post("/api/hr/recruitment/candidates")
@@ -5525,12 +5561,8 @@ async def recruitment_list_offers(
 async def recruitment_summary(
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(func.count())
-        .select_from(HRVacancy)
-        .where(HRVacancy.status == "open")
-    )
-    open_vacancies = result.scalar_one()
+    vacancy_snapshot = await _hr_recruitment_vacancy_snapshot(db)
+    open_vacancies = vacancy_snapshot["open_vacancy_count"]
 
     result = await db.execute(
         select(func.count())
@@ -5561,6 +5593,12 @@ async def recruitment_summary(
 
     return {
         "open_vacancies": open_vacancies,
+        "open_vacancy_ids": [
+            row["id"] for row in vacancy_snapshot["open_records"]
+        ],
+        "vacancy_record_count": vacancy_snapshot["record_count"],
+        "vacancy_snapshot_at": vacancy_snapshot["snapshot_at"],
+        "vacancy_source": vacancy_snapshot["source"],
         "total_candidates": total_candidates,
         "interview_stage": interviews,
         "offer_stage": offer_stage,
@@ -79167,18 +79205,15 @@ async def _ceo_exec_get_hr_vacancy_state(
             "reason": "Vacancy title is required for a live status lookup.",
         }
 
-    rows = (
-        await db.execute(
-            select(HRVacancy).order_by(HRVacancy.created_at.desc())
-        )
-    ).scalars().all()
+    vacancy_snapshot = await _hr_recruitment_vacancy_snapshot(db)
+    all_records = vacancy_snapshot["records"]
     normalized_title = _ceo_org_normalize(title)
     matching = [
         row
-        for row in rows
+        for row in all_records
         if (
-            normalized_title in _ceo_org_normalize(row.title_ar)
-            or normalized_title in _ceo_org_normalize(row.title_en)
+            normalized_title in _ceo_org_normalize(row["title_ar"])
+            or normalized_title in _ceo_org_normalize(row["title_en"])
         )
     ]
     positions = (await db.execute(select(HRPosition))).scalars().all()
@@ -79188,31 +79223,23 @@ async def _ceo_exec_get_hr_vacancy_state(
 
     records = []
     for row in matching:
-        position = position_map.get(str(row.position_id)) if row.position_id else None
+        position = (
+            position_map.get(str(row["position_id"]))
+            if row["position_id"] else None
+        )
         department = (
             department_map.get(str(position.department_id))
             if position and position.department_id
             else None
         )
-        records.append(
-            {
-                "id": str(row.id),
-                "position_id": str(row.position_id) if row.position_id else None,
-                "position_code": position.code if position else None,
-                "department_id": str(department.id) if department else None,
-                "department_code": department.code if department else None,
-                "title_ar": row.title_ar,
-                "title_en": row.title_en,
-                "status": row.status,
-                "openings": row.openings,
-                "employment_type": row.employment_type,
-                "work_location": row.work_location,
-                "description": row.description,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-            }
-        )
+        records.append({
+            **row,
+            "position_code": position.code if position else None,
+            "department_id": str(department.id) if department else None,
+            "department_code": department.code if department else None,
+        })
 
-    open_records = [row for row in records if row["status"] == "open"]
+    open_records = [row for row in records if row["is_open"]]
     return {
         "status": "read_only",
         "operation": "hr_vacancy_live_state_read",
@@ -79223,9 +79250,12 @@ async def _ceo_exec_get_hr_vacancy_state(
             "found": bool(records),
             "matching_record_count": len(records),
             "matching_open_vacancy_count": len(open_records),
-            "system_open_vacancy_count": sum(
-                row.status == "open" for row in rows
-            ),
+            "system_open_vacancy_count": vacancy_snapshot["open_vacancy_count"],
+            "system_open_vacancy_ids": [
+                row["id"] for row in vacancy_snapshot["open_records"]
+            ],
+            "snapshot_at": vacancy_snapshot["snapshot_at"],
+            "source": vacancy_snapshot["source"],
             "records": records,
         },
         "external_send": False,
@@ -83381,6 +83411,137 @@ def _ceo_exec_override_non_employee_workers_plan(
     }
 
 
+def _ceo_exec_truth_response(evidence: dict):
+    """Render handled CEO actions from evidence, without model-generated claims."""
+
+    lines = ["نتيجة التحقق والتنفيذ من سجلات النظام:"]
+    actions = evidence.get("actions") or []
+    for index, item in enumerate(actions, start=1):
+        title = str(item.get("title") or item.get("type") or "إجراء")
+        status = str(item.get("status") or "blocked").strip().casefold()
+        lines.append(f"\n{index}) {title}")
+
+        if status == "read_only":
+            lines.append("الحالة: قراءة مباشرة من النظام — لا يوجد تعديل.")
+            live_evidence = item.get("evidence") or {}
+            if item.get("type") == "get_hr_vacancy_state":
+                found = bool(live_evidence.get("found"))
+                matching_count = live_evidence.get("matching_record_count", 0)
+                matching_open = live_evidence.get("matching_open_vacancy_count", 0)
+                system_open = live_evidence.get("system_open_vacancy_count", 0)
+                lines.append(
+                    "الشاغر المطابق: "
+                    + ("موجود" if found else "غير موجود")
+                    + f"؛ السجلات المطابقة: {matching_count}؛ "
+                    + f"المفتوحة بالاسم نفسه: {matching_open}؛ "
+                    + f"إجمالي الشواغر المفتوحة: {system_open}."
+                )
+                ids = live_evidence.get("system_open_vacancy_ids") or []
+                if ids:
+                    lines.append("معرّفات الشواغر المفتوحة: " + ", ".join(map(str, ids)))
+                lines.append(
+                    "مصدر التحقق: "
+                    + str(live_evidence.get("source") or "HRVacancy")
+                    + "."
+                )
+            else:
+                compact = json.dumps(
+                    live_evidence,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
+                lines.append("الدليل المباشر: " + compact[:1800])
+            continue
+
+        if status == "blocked":
+            lines.append("الحالة: لم يُنفّذ.")
+            lines.append("السبب: " + str(item.get("reason") or "لم يثبت الإجراء."))
+            continue
+
+        if status == "waiting_approval":
+            lines.append("الحالة: بانتظار الموافقة المطلوبة؛ لم يتم اعتبارها مكتملة.")
+            if item.get("reason"):
+                lines.append("التفصيل: " + str(item["reason"]))
+            continue
+
+        if status == "executed":
+            record = item.get("record")
+            artifacts = item.get("artifacts")
+            has_evidence = bool(
+                item.get("verified") is True
+                or isinstance(record, (dict, list))
+                or isinstance(artifacts, list)
+                or item.get("evidence")
+                or item.get("artifact")
+                or item.get("attachment")
+                or item.get("departments")
+                or item.get("positions")
+                or item.get("activated_count") is not None
+                or item.get("created_count") is not None
+                or item.get("reused_count") is not None
+            )
+            if not has_evidence:
+                lines.append("الحالة: لم أعتبره مكتملًا؛ لا يوجد دليل سجل قابل للتحقق.")
+                continue
+            lines.append("الحالة: تم التنفيذ مع دليل سجل قابل للتحقق.")
+            if isinstance(record, dict):
+                record_id = (
+                    record.get("id")
+                    or record.get("employee_id")
+                    or record.get("vacancy_id")
+                )
+                if record_id:
+                    lines.append("معرّف السجل: " + str(record_id))
+                if record.get("status") is not None:
+                    lines.append("حالة السجل: " + str(record.get("status")))
+            if not isinstance(record, dict) and not isinstance(artifacts, list):
+                compact = json.dumps(
+                    {
+                        key: value
+                        for key, value in item.items()
+                        if key not in {"type", "agent_slug", "title", "status"}
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
+                lines.append("الدليل المباشر: " + compact[:1800])
+            if isinstance(artifacts, list) and artifacts:
+                names = []
+                links = []
+                for artifact in artifacts:
+                    if isinstance(artifact, dict):
+                        nested = [artifact]
+                        nested.extend(
+                            value
+                            for key, value in artifact.items()
+                            if key.endswith("_attachment") and isinstance(value, dict)
+                        )
+                        for info in nested:
+                            names.append(str(
+                                info.get("file_name")
+                                or info.get("format")
+                                or info.get("name")
+                                or "مرفق"
+                            ))
+                            if info.get("download_url"):
+                                links.append(str(info["download_url"]))
+                if names:
+                    lines.append("المخرجات المثبتة: " + ", ".join(names))
+                if links:
+                    lines.append("روابط التنزيل: " + ", ".join(links))
+            if item.get("external_send") is False:
+                lines.append("الإرسال الخارجي: لم يتم.")
+            continue
+
+        lines.append("الحالة: غير معروفة؛ لم أعتبر الإجراء مكتملًا.")
+
+    if not actions:
+        return None
+    return "\n".join(lines)
+
+
 async def _ceo_execution_layer(
     db: AsyncSession,
     source_text: str,
@@ -83848,7 +84009,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.7",
+        "version": "1.6.8",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

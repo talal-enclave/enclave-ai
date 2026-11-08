@@ -1,3 +1,24 @@
+# Enclave v1.6.8 — Canonical evidence firewall
+
+This release closes the remaining mismatch where the CEO's live vacancy read
+could disagree with the HR recruitment screen or where a page-load failure was
+silently rendered as zero.
+
+- HR vacancy summary, vacancy list and CEO vacancy reads now use one canonical
+  `HRVacancy` snapshot with the same status normalization, IDs and counts.
+- CEO responses for handled actions are rendered from execution evidence, not
+  from model-generated completion/status prose. Unsupported or unverified
+  results are shown as blocked.
+- The recruitment screen refreshes live data, exposes load errors and never
+  replaces an unavailable or conflicting result with a false zero.
+- The same evidence-first execution and approval gates remain in force for
+  Finance, Sales, HR, Procurement, Legal, Admin, IT, Marketing and Audit.
+
+No government records, external communications, payments or existing files are
+reset or changed by this release.
+
+---
+
 # Enclave v1.6.7 — Live status evidence firewall
 
 This release closes the read-only false-success path shown when the CEO
