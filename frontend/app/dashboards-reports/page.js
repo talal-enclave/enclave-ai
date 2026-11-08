@@ -105,6 +105,105 @@ function Table({ children, minWidth = 620 }) {
 
 const cell = { padding: "10px 8px", borderBottom: `1px solid ${C.border}`, textAlign: "right", verticalAlign: "top" };
 
+function ChartCard({ title, subtitle, children }) {
+  return (
+    <section style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 18, padding: 17, minWidth: 0 }}>
+      <h2 style={{ margin: 0, fontSize: 17 }}>{title}</h2>
+      <div style={{ color: C.mint, fontSize: 11, marginTop: 5 }}>{subtitle}</div>
+      <div style={{ marginTop: 16 }}>{children}</div>
+    </section>
+  );
+}
+
+function HorizontalBars({ items, formatter = (value) => value }) {
+  const rows = (items || []).filter((item) => Number(item.value || 0) !== 0 || item.showZero);
+  if (!rows.length) return <Empty>لا توجد بيانات كافية لعرض الرسم حالياً.</Empty>;
+
+  const max = Math.max(1, ...rows.map((item) => Math.abs(Number(item.value || 0))));
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      {rows.map((item) => {
+        const value = Number(item.value || 0);
+        const width = Math.max(value === 0 ? 0 : 4, Math.round((Math.abs(value) / max) * 100));
+        const color = item.color || C.primary;
+        return (
+          <div key={item.label}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, color: C.pale, fontSize: 11 }}>
+              <span>{item.label}</span>
+              <strong style={{ color: value < 0 ? C.danger : color }}>{formatter(value)}</strong>
+            </div>
+            <div style={{ height: 9, marginTop: 6, borderRadius: 999, background: "rgba(255,255,255,.07)", overflow: "hidden" }}>
+              <div style={{ width: `${width}%`, height: "100%", borderRadius: 999, background: `linear-gradient(90deg, ${color}, ${color}88)` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DonutChart({ segments, centerLabel = "الإجمالي" }) {
+  const rows = (segments || []).filter((item) => Number(item.value || 0) > 0);
+  const total = rows.reduce((sum, item) => sum + Number(item.value || 0), 0);
+  if (!total) return <Empty>لا توجد بيانات كافية لعرض الرسم حالياً.</Empty>;
+
+  let cursor = 0;
+  const stops = rows.map((item) => {
+    const start = (cursor / total) * 360;
+    cursor += Number(item.value || 0);
+    const end = (cursor / total) * 360;
+    return `${item.color || C.primary} ${start}deg ${end}deg`;
+  }).join(", ");
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+      <div style={{ width: 132, height: 132, borderRadius: "50%", background: `conic-gradient(${stops})`, display: "grid", placeItems: "center", flex: "0 0 auto" }}>
+        <div style={{ width: 78, height: 78, borderRadius: "50%", background: C.panel, display: "grid", placeItems: "center", textAlign: "center" }}>
+          <strong style={{ fontSize: 20, color: C.pale }}>{total.toLocaleString("en-SA")}</strong>
+          <span style={{ color: C.mint, fontSize: 9 }}>{centerLabel}</span>
+        </div>
+      </div>
+      <div style={{ display: "grid", gap: 8, minWidth: 150 }}>
+        {rows.map((item) => <div key={item.label} style={{ display: "flex", alignItems: "center", gap: 7, color: C.pale, fontSize: 11 }}><span style={{ width: 9, height: 9, borderRadius: 999, background: item.color || C.primary }} /><span style={{ flex: 1 }}>{item.label}</span><strong>{Number(item.value || 0).toLocaleString("en-SA")}</strong></div>)}
+      </div>
+    </div>
+  );
+}
+
+function TargetProgressChart({ targets }) {
+  const rows = (targets || []).filter((row) => Number(row.target_amount || 0) > 0);
+  if (!rows.length) return <Empty>لا توجد أهداف مبيعات معتمدة حالياً.</Empty>;
+
+  return (
+    <div style={{ display: "grid", gap: 13 }}>
+      {rows.slice(0, 8).map((row) => {
+        const target = Number(row.target_amount || 0);
+        const realized = Number(row.realized_amount || 0);
+        const pipeline = Number(row.qualified_pipeline || 0);
+        const realizedWidth = Math.min(100, Math.max(0, (realized / target) * 100));
+        const pipelineWidth = Math.min(100, Math.max(0, (pipeline / target) * 100));
+        return (
+          <div key={row.target_id || `${row.period_label}-${row.owner_name}`}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11 }}>
+              <span>{row.period_label || "الفترة"} · {row.owner_name || "كل الفريق"}</span>
+              <strong style={{ color: C.pale }}>{money(realized)} / {money(target)}</strong>
+            </div>
+            <div style={{ position: "relative", height: 11, marginTop: 6, borderRadius: 999, background: "rgba(255,255,255,.07)", overflow: "hidden" }}>
+              <div style={{ position: "absolute", inset: "0 auto 0 0", width: `${pipelineWidth}%`, background: `${C.blue}99`, borderRadius: 999 }} />
+              <div style={{ position: "absolute", inset: "0 auto 0 0", width: `${realizedWidth}%`, background: C.primary, borderRadius: 999 }} />
+            </div>
+            <div style={{ display: "flex", gap: 12, color: C.mint, fontSize: 9, marginTop: 5 }}>
+              <span><i style={{ display: "inline-block", width: 7, height: 7, borderRadius: 999, background: C.primary, marginLeft: 4 }} />المحقق {money(realized)}</span>
+              <span><i style={{ display: "inline-block", width: 7, height: 7, borderRadius: 999, background: C.blue, marginLeft: 4 }} />البايبلاين {money(pipeline)}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function DashboardsReportsPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -151,6 +250,37 @@ export default function DashboardsReportsPage() {
   const workforce = hrMonthly.workforce || {};
   const finance = data?.finance || {};
 
+  const taskSegments = [
+    { label: "مكتملة", value: Number(summary.completed_tasks || 0), color: C.primary },
+    { label: "قيد التنفيذ", value: Number(summary.in_progress_tasks || 0), color: C.blue },
+    { label: "معلقة", value: Number(summary.pending_tasks || 0), color: C.warning },
+    { label: "بانتظار اعتماد", value: Number(summary.pending_approvals || 0), color: C.danger },
+  ];
+
+  const salesStatusCounts = opportunities.reduce((result, row) => {
+    const key = String(row.status || "open").toLowerCase();
+    result[key] = (result[key] || 0) + 1;
+    return result;
+  }, {});
+  const salesChartItems = [
+    { label: "جارية", value: salesStatusCounts.open || activeOpportunities.length, color: C.blue, showZero: true },
+    { label: "موقعة / فائزة", value: (salesStatusCounts.won || 0) + (salesStatusCounts.closed_won || 0) + (salesStatusCounts.signed || 0) + (salesStatusCounts.contracted || 0), color: C.primary, showZero: true },
+    { label: "مغلقة / خاسرة", value: salesStatusCounts.lost || salesStatusCounts.closed_lost || 0, color: C.danger, showZero: true },
+  ];
+
+  const complianceChartItems = [
+    { label: "سارية", value: complianceRows.filter((row) => ["active", "valid", "current"].includes(String(row.status || "").toLowerCase())).length, color: C.primary, showZero: true },
+    { label: "تجديد قريب", value: complianceRows.filter((row) => row.status === "renewal_due").length, color: C.warning, showZero: true },
+    { label: "تحتاج تصعيد", value: complianceRows.filter((row) => row.status === "escalation").length, color: C.danger, showZero: true },
+    { label: "منتهية", value: complianceRows.filter((row) => row.status === "expired").length, color: C.danger, showZero: true },
+  ];
+
+  const financialChartItems = [
+    { label: "الإيرادات YTD", value: Number(finance.year_to_date?.revenue || 0), color: C.primary },
+    { label: "المصروفات YTD", value: Number(finance.year_to_date?.expense || 0), color: C.warning },
+    { label: "صافي الربح YTD", value: Number(finance.year_to_date?.net_profit || 0), color: Number(finance.year_to_date?.net_profit || 0) < 0 ? C.danger : C.blue },
+  ];
+
   return (
     <main dir="rtl" style={{ minHeight: "100vh", background: C.bg, color: C.pale, padding: 28 }}>
       <div style={{ maxWidth: 1660, margin: "0 auto" }}>
@@ -179,6 +309,25 @@ export default function DashboardsReportsPage() {
           <Card title="تنبيهات حكومية" value={complianceAlerts.length} subtitle="Renewal / expiry alerts" accent={C.danger} />
           <Card title="صافي الربح YTD" value={finance.year_to_date?.net_profit == null ? "—" : money(finance.year_to_date.net_profit)} subtitle="Finance snapshot" accent={finance.year_to_date?.net_profit >= 0 ? C.primary : C.danger} />
         </section>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(310px,1fr))", gap: 16, marginBottom: 16 }}>
+          <ChartCard title="توزيع الأعمال" subtitle="المهام والاعتمادات المسجلة في النظام">
+            <DonutChart segments={taskSegments} centerLabel="عمل" />
+          </ChartCard>
+          <ChartCard title="البايبلاين حسب الحالة" subtitle="عدد الفرص التجارية الفعلية">
+            <HorizontalBars items={salesChartItems} formatter={(value) => `${value.toLocaleString("en-SA")} فرصة`} />
+          </ChartCard>
+          <ChartCard title="الامتثال والانتهاءات" subtitle="الخدمات الحكومية والشهادات المسجلة">
+            <HorizontalBars items={complianceChartItems} formatter={(value) => `${value.toLocaleString("en-SA")} سجل`} />
+          </ChartCard>
+          <ChartCard title="الملخص المالي YTD" subtitle="الإيرادات والمصروفات وصافي الربح">
+            <HorizontalBars items={financialChartItems} formatter={money} />
+          </ChartCard>
+        </div>
+
+        <Section title="الأهداف مقابل المحقق" subtitle="المحقق والبايبلاين مقارنة بالهدف المعتمد. الأزرق للبايبلاين والأخضر للمحقق.">
+          <TargetProgressChart targets={data?.forecast?.targets || []} />
+        </Section>
 
         <Section title="ملخص الأعمال والأهداف" subtitle="الأرقام مبنية على المهام والأهداف المعتمدة المسجلة في النظام." action={<a href="/dashboard" style={smallLink}>لوحة القيادة الحالية</a>}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16 }}>
