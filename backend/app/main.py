@@ -78431,6 +78431,7 @@ async def ceo_office_status(
 _CEO_EXEC_ACTIONS = {
     "create_technical_proposal",
     "generate_technical_proposal_artifacts",
+    "create_organizational_structure",
     "list_pending_tasks",
     "generate_workers_template",
     "register_non_employee_workers",
@@ -78446,6 +78447,398 @@ _CEO_EXEC_ACTIONS = {
     "create_commercial_proposal",
     "generate_financial_proposal_artifacts",
 }
+
+
+def _ceo_default_organizational_structure():
+    """Return the approved internal three-department starter structure.
+
+    These are internal HR registry defaults only.  They do not create
+    employees, contracts, payroll, accounting postings or external effects.
+    """
+
+    return [
+        {
+            "code": "EXE",
+            "name_ar": "الإدارة التنفيذية",
+            "name_en": "Executive Department",
+            "cost_center": "CC-100",
+            "description": (
+                "وحدة مسؤولة عن قيادة تنفيذ الاستراتيجية وإدارة مكتب الرئيس التنفيذي."
+            ),
+            "positions": [
+                {
+                    "code": "CEO",
+                    "title_ar": "الرئيس التنفيذي",
+                    "title_en": "Chief Executive Officer",
+                    "reporting_to": "المالك / مجلس الإدارة حسب الهيكلة المعتمدة",
+                    "is_department_head": True,
+                },
+                {
+                    "code": "EOM",
+                    "title_ar": "مدير المكتب التنفيذي",
+                    "title_en": "Executive Office Manager",
+                    "reporting_to": "الرئيس التنفيذي",
+                    "is_department_head": False,
+                },
+            ],
+        },
+        {
+            "code": "TECH",
+            "name_ar": "الإدارة التقنية",
+            "name_en": "Technology Department",
+            "cost_center": "CC-200",
+            "description": (
+                "مسؤولة عن البنية التحتية التقنية وهندسة الحلول وإدارة النظم والأمن المعلوماتي."
+            ),
+            "positions": [
+                {
+                    "code": "CTO",
+                    "title_ar": "الرئيس التنفيذي للشؤون التقنية",
+                    "title_en": "Chief Technical Officer",
+                    "reporting_to": "الرئيس التنفيذي",
+                    "is_department_head": True,
+                },
+            ],
+        },
+        {
+            "code": "SSC",
+            "name_ar": "إدارة الخدمات المشتركة",
+            "name_en": "Shared Services Department",
+            "cost_center": "CC-300",
+            "description": (
+                "تقدم خدمات الدعم المؤسسي المشتركة مثل الموارد البشرية والمشتريات والدعم الإداري."
+            ),
+            "positions": [
+                {
+                    "code": "CSSO",
+                    "title_ar": "الرئيس التنفيذي للخدمات المشتركة",
+                    "title_en": "Chief Shared Services Officer",
+                    "reporting_to": "الرئيس التنفيذي",
+                    "is_department_head": True,
+                },
+            ],
+        },
+    ]
+
+
+def _ceo_org_normalize(value):
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def _ceo_org_optional_set(row, value, *names):
+    """Set an optional model field only when this deployment supports it."""
+
+    for name in names:
+        if hasattr(row, name):
+            setattr(row, name, value)
+            return name
+    return None
+
+
+def _ceo_org_department_payload(row, spec):
+    return {
+        "id": str(row.id),
+        "code": row.code,
+        "name_ar": row.name_ar,
+        "name_en": row.name_en,
+        "cost_center": row.cost_center,
+        "description": spec.get("description"),
+        "is_active": row.is_active,
+    }
+
+
+def _ceo_org_position_payload(row, spec, department):
+    return {
+        "id": str(row.id),
+        "code": row.code,
+        "title_ar": row.title_ar,
+        "title_en": row.title_en,
+        "department_id": str(row.department_id) if row.department_id else None,
+        "department_code": department.code,
+        "reporting_to": spec.get("reporting_to"),
+        "is_department_head": bool(spec.get("is_department_head")),
+        "headcount_budget": row.headcount_budget,
+        "is_active": row.is_active,
+    }
+
+
+async def _ceo_exec_create_organizational_structure(
+    db: AsyncSession,
+    conversation_id,
+    source_text: str,
+    data: dict | None = None,
+):
+    """Create/reuse the internal HR departments and positions requested by CEO chat.
+
+    The operation is deliberately idempotent.  A retry reuses exact code
+    matches, while a conflicting code is blocked before any mutation is made.
+    """
+
+    specs = (data or {}).get("departments") or _ceo_default_organizational_structure()
+    if not isinstance(specs, list) or not specs:
+        return {
+            "status": "blocked",
+            "reason": "No organizational structure specification was supplied.",
+        }
+
+    existing_departments = (
+        await db.execute(select(HRDepartment))
+    ).scalars().all()
+    departments_by_code = {
+        _ceo_org_normalize(row.code): row
+        for row in existing_departments
+        if row.code
+    }
+    departments_by_name = {
+        _ceo_org_normalize(row.name_ar): row
+        for row in existing_departments
+        if row.name_ar
+    }
+
+    department_rows = []
+    department_created = []
+    department_reused = []
+    conflicts = []
+
+    # Preflight all department conflicts before adding anything.
+    for spec in specs:
+        code = str(spec.get("code") or "").strip()
+        name_ar = str(spec.get("name_ar") or "").strip()
+        name_en = str(spec.get("name_en") or "").strip() or None
+        cost_center = str(spec.get("cost_center") or "").strip() or None
+        if not code or not name_ar:
+            conflicts.append("Each department requires a code and Arabic name.")
+            continue
+
+        by_code = departments_by_code.get(_ceo_org_normalize(code))
+        by_name = departments_by_name.get(_ceo_org_normalize(name_ar))
+        if by_code is not None and (
+            _ceo_org_normalize(by_code.name_ar) != _ceo_org_normalize(name_ar)
+            or (name_en and _ceo_org_normalize(by_code.name_en) != _ceo_org_normalize(name_en))
+        ):
+            conflicts.append(
+                f"Department code {code} already belongs to another department."
+            )
+            continue
+        if by_name is not None and _ceo_org_normalize(by_name.code) != _ceo_org_normalize(code):
+            conflicts.append(
+                f"Department {name_ar} already exists with code {by_name.code}."
+            )
+            continue
+        department_rows.append((spec, by_code or by_name, cost_center))
+
+    if conflicts:
+        return {
+            "status": "blocked",
+            "reason": " ".join(conflicts[:10]),
+            "records_created": False,
+        }
+
+    for spec, row, cost_center in department_rows:
+        if row is None:
+            row = HRDepartment(
+                code=str(spec["code"]).strip(),
+                name_ar=str(spec["name_ar"]).strip(),
+                name_en=(str(spec.get("name_en") or "").strip() or None),
+                parent_id=None,
+                cost_center=cost_center,
+            )
+            db.add(row)
+            await db.flush()
+            department_created.append(row)
+        else:
+            department_reused.append(row)
+            # A matching internal record should be visible as active in HR.
+            if hasattr(row, "is_active") and row.is_active is False:
+                row.is_active = True
+                await db.flush()
+            if cost_center and row.cost_center != cost_center:
+                row.cost_center = cost_center
+                await db.flush()
+            if not getattr(row, "name_en", None) and spec.get("name_en"):
+                row.name_en = str(spec["name_en"]).strip()
+                await db.flush()
+
+    # Rebuild a stable mapping after inserts so retries and flushes are
+    # resolved from the actual persisted department objects.
+    resolved_departments = []
+    for spec, original_row, cost_center in department_rows:
+        code = str(spec["code"]).strip()
+        row = next(
+            (
+                candidate
+                for candidate in department_created + department_reused
+                if _ceo_org_normalize(candidate.code) == _ceo_org_normalize(code)
+            ),
+            None,
+        )
+        if row is None:
+            await db.rollback()
+            return {
+                "status": "blocked",
+                "reason": f"Department {code} could not be verified after creation.",
+                "records_created": False,
+            }
+        resolved_departments.append((spec, row))
+
+    existing_positions = (
+        await db.execute(select(HRPosition))
+    ).scalars().all()
+    positions_by_code = {
+        _ceo_org_normalize(row.code): row
+        for row in existing_positions
+        if row.code
+    }
+    positions_by_title = {
+        _ceo_org_normalize(row.title_ar): row
+        for row in existing_positions
+        if row.title_ar
+    }
+
+    position_plan = []
+    for department_spec, department in resolved_departments:
+        for position_spec in department_spec.get("positions") or []:
+            code = str(position_spec.get("code") or "").strip()
+            title_ar = str(position_spec.get("title_ar") or "").strip()
+            title_en = str(position_spec.get("title_en") or "").strip() or None
+            if not code or not title_ar:
+                conflicts.append("Each position requires a code and Arabic title.")
+                continue
+            by_code = positions_by_code.get(_ceo_org_normalize(code))
+            by_title = positions_by_title.get(_ceo_org_normalize(title_ar))
+            matched = by_code or by_title
+            if by_code is not None and (
+                _ceo_org_normalize(by_code.title_ar) != _ceo_org_normalize(title_ar)
+                or (title_en and _ceo_org_normalize(by_code.title_en) != _ceo_org_normalize(title_en))
+            ):
+                conflicts.append(
+                    f"Position code {code} already belongs to another position."
+                )
+                continue
+            if by_title is not None and _ceo_org_normalize(by_title.code) != _ceo_org_normalize(code):
+                conflicts.append(
+                    f"Position {title_ar} already exists with code {by_title.code}."
+                )
+                continue
+            if matched is not None and matched.department_id not in (None, department.id):
+                conflicts.append(
+                    f"Position {code} belongs to a different department."
+                )
+                continue
+            position_plan.append((position_spec, matched, department))
+
+    if conflicts:
+        # Position preflight happens after department resolution.  If it finds
+        # a conflict, remove any department changes from this attempt so a
+        # blocked result can never commit a partial structure.
+        await db.rollback()
+        return {
+            "status": "blocked",
+            "reason": " ".join(conflicts[:10]),
+            "records_created": False,
+        }
+
+    position_created = []
+    position_reused = []
+    reporting_fields = {}
+    ceo_position = None
+
+    # Create CEO first so optional reporting fields can point to it.
+    position_plan.sort(
+        key=lambda item: 0 if str(item[0].get("code")) == "CEO" else 1
+    )
+    for position_index, (position_spec, row, department) in enumerate(position_plan):
+        if row is None:
+            row = HRPosition(
+                code=str(position_spec["code"]).strip(),
+                title_ar=str(position_spec["title_ar"]).strip(),
+                title_en=(str(position_spec.get("title_en") or "").strip() or None),
+                department_id=department.id,
+                grade="Executive",
+                employment_level="executive",
+                headcount_budget=1,
+                min_salary=None,
+                midpoint_salary=None,
+                max_salary=None,
+            )
+            db.add(row)
+            await db.flush()
+            position_created.append(row)
+        else:
+            position_reused.append(row)
+            if row.department_id is None:
+                row.department_id = department.id
+                await db.flush()
+            if hasattr(row, "is_active") and row.is_active is False:
+                row.is_active = True
+                await db.flush()
+            if not getattr(row, "title_en", None) and position_spec.get("title_en"):
+                row.title_en = str(position_spec["title_en"]).strip()
+                await db.flush()
+        position_plan[position_index] = (position_spec, row, department)
+        if _ceo_org_normalize(row.code) == "ceo":
+            ceo_position = row
+
+    if ceo_position is not None:
+        for position_spec, row, _department in position_plan:
+            if _ceo_org_normalize(row.code) == "ceo":
+                continue
+            if _ceo_org_normalize(str(position_spec.get("reporting_to"))) == _ceo_org_normalize("الرئيس التنفيذي"):
+                field = _ceo_org_optional_set(
+                    row,
+                    ceo_position.id,
+                    "reports_to_position_id",
+                    "manager_position_id",
+                    "parent_position_id",
+                    "supervisor_position_id",
+                )
+                if field:
+                    reporting_fields[row.code] = field
+        await db.flush()
+
+    departments_payload = [
+        _ceo_org_department_payload(row, spec)
+        for spec, row in resolved_departments
+    ]
+    positions_payload = [
+        _ceo_org_position_payload(row, spec, department)
+        for spec, row, department in position_plan
+    ]
+
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="ceo.organizational_structure.created",
+        details={
+            "conversation_id": str(conversation_id) if conversation_id else None,
+            "source_excerpt": str(source_text or "")[:2000],
+            "departments": departments_payload,
+            "positions": positions_payload,
+            "department_created_count": len(department_created),
+            "department_reused_count": len(department_reused),
+            "position_created_count": len(position_created),
+            "position_reused_count": len(position_reused),
+            "optional_reporting_fields": reporting_fields,
+            "external_send": False,
+            "approval_required": False,
+        },
+    )
+
+    return {
+        "status": "executed",
+        "operation": "organizational_structure_created_or_reused",
+        "record_type": "hr_organizational_structure",
+        "departments": departments_payload,
+        "positions": positions_payload,
+        "department_created_count": len(department_created),
+        "department_reused_count": len(department_reused),
+        "position_created_count": len(position_created),
+        "position_reused_count": len(position_reused),
+        "reporting_fields": reporting_fields,
+        "verified": True,
+        "external_send": False,
+        "approval_required": False,
+    }
 
 
 async def _ceo_exec_list_pending_tasks(db: AsyncSession):
@@ -80248,6 +80641,18 @@ async def _ceo_exec_action(
             **registered,
         }
 
+    if action_type == "create_organizational_structure":
+        structure = await _ceo_exec_create_organizational_structure(
+            db,
+            conversation_id,
+            source_text,
+            data,
+        )
+        return {
+            **base,
+            **structure,
+        }
+
     if action_type == "get_finance_status":
         return {
             **base,
@@ -81298,6 +81703,87 @@ def _ceo_exec_override_task_lookup_plan(plan: dict, source_text: str):
     }
 
 
+def _ceo_exec_override_organizational_structure_plan(
+    plan: dict,
+    source_text: str,
+):
+    """Route a clear three-department HR structure request to the real DB action."""
+
+    folded = str(source_text or "").casefold()
+    create_word = any(
+        marker in folded
+        for marker in (
+            "انشئ",
+            "أنشئ",
+            "انشاء",
+            "إنشاء",
+            "أضف",
+            "اضف",
+            "create",
+            "add",
+        )
+    )
+    department_hits = sum(
+        marker in folded
+        for marker in (
+            "الإدارة التنفيذية",
+            "الادارة التنفيذية",
+            "الإدارة التقنية",
+            "الادارة التقنية",
+            "الادرة التقنية",
+            "إدارة الخدمات المشتركة",
+            "ادارة الخدمات المشتركة",
+            "shared services",
+            "technology department",
+            "executive department",
+        )
+    )
+    position_hits = sum(
+        marker in folded
+        for marker in (
+            "الرئيس التنفيذي",
+            "مدير المكتب التنفيذي",
+            "chief executive officer",
+            "chief technical officer",
+            "chief shared services officer",
+            "executive office manager",
+        )
+    )
+    structure_detail = any(
+        marker in folded
+        for marker in (
+            "رمز",
+            "مركز تكلفة",
+            "cost center",
+            "بكامل تفاصيل",
+            "report",
+            "مديره",
+            "يتبع",
+        )
+    )
+
+    if not (create_word and department_hits >= 2 and position_hits >= 2 and structure_detail):
+        return plan
+
+    return {
+        "handled": True,
+        "title": "Create and verify HR organizational structure",
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "create_organizational_structure",
+                "agent_slug": "ceo",
+                "title": "Create or reuse departments and positions in HR",
+                "data": {
+                    "departments": _ceo_default_organizational_structure(),
+                },
+            }
+        ],
+        "routing": "deterministic_organizational_structure",
+    }
+
+
 def _ceo_exec_override_workers_template_plan(plan: dict, source_text: str):
     folded = str(source_text or "").casefold()
     template_word = any(
@@ -81468,6 +81954,16 @@ async def _ceo_execution_layer(
         "them as external_worker/non_employee records only. Do not create a "
         "formal employment contract, payroll entry, GOSI registration, payment "
         "or external communication. "
+        "Use create_organizational_structure when the user explicitly asks to "
+        "create or add departments, organizational units, positions or reporting "
+        "lines. A direct authenticated instruction from this single user is "
+        "sufficient authorization for these internal HR registry records; never "
+        "ask for written delegation. Execute the action and verify the live "
+        "department/position IDs before claiming completion. For the approved "
+        "three-department starter structure, use EXE/TECH/SSC and CC-100/CC-200/CC-300 "
+        "only as internal registry defaults when the user has not supplied different "
+        "codes or cost centers. This action does not create employees, contracts, "
+        "payroll, GOSI records, accounting postings or external communication. "
         "Use get_finance_status for finance/billing status, "
         "get_accountability for named-person status. When the named person "
         "is Fahad Al-Anzi, treat him as an external commercial contributor "
@@ -81572,6 +82068,11 @@ async def _ceo_execution_layer(
 
     plan = await _ceo_exec_override_explicit_technical_proposal_plan(
         db,
+        plan,
+        source_text,
+    )
+
+    plan = _ceo_exec_override_organizational_structure_plan(
         plan,
         source_text,
     )
@@ -81709,7 +82210,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.2",
+        "version": "1.6.3",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
