@@ -43,6 +43,30 @@ function dateText(value) {
   });
 }
 
+function taskHref(row) {
+  const params = new URLSearchParams();
+  const fields = [
+    ["task_id", row?.id],
+    ["task_title", row?.title],
+    ["task_description", row?.description],
+    ["task_status", row?.status],
+    ["task_priority", row?.priority],
+    ["task_due", row?.due_at],
+    ["task_agent", row?.agent_slug],
+  ];
+
+  for (const [key, value] of fields) {
+    if (value == null || String(value).trim() === "") continue;
+    const normalized = String(value);
+    params.set(
+      key,
+      key === "task_description" ? normalized.slice(0, 1400) : normalized,
+    );
+  }
+
+  return `/?${params.toString()}`;
+}
+
 function money(value) {
   return `${Number(value || 0).toLocaleString("en-SA", {
     maximumFractionDigits: 2,
@@ -312,7 +336,8 @@ export default function ExecutivePage() {
         title: row.title || "مهمة تنفيذية",
         detail: overdue ? `متأخرة · ${statusLabel(row.status)}` : `أولوية ${row.priority}`,
         severity: overdue ? "critical" : row.priority,
-        href: "/dashboard",
+        href: taskHref(row),
+        cta: "تابع مع الرئيس التنفيذي",
       });
     }
 
@@ -398,10 +423,10 @@ export default function ExecutivePage() {
         </section>
 
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.2fr) minmax(340px,.8fr)", gap: 16, alignItems: "start" }}>
-          <Section title="المهام المعلقة" subtitle="كل المهام المفتوحة من السجل التشغيلي" action={<a href="/dashboard" style={smallLink}>فتح لوحة القيادة</a>}>
+          <Section title="المهام المعلقة" subtitle="كل المهام المفتوحة من السجل التشغيلي · اختر المتابعة لفتح محادثة الرئيس التنفيذي برسالة جاهزة" action={<a href="/dashboard" style={smallLink}>فتح لوحة القيادة</a>}>
             {pendingTasks.length ? (
               <Table>
-                <thead><tr>{["المهمة", "الأولوية", "موعد الاستحقاق", "الحالة"].map((x) => <th key={x} style={{ ...cell, color: C.mint, fontWeight: 700 }}>{x}</th>)}</tr></thead>
+                <thead><tr>{["المهمة", "الأولوية", "موعد الاستحقاق", "الحالة", "المتابعة"].map((x) => <th key={x} style={{ ...cell, color: C.mint, fontWeight: 700 }}>{x}</th>)}</tr></thead>
                 <tbody>
                   {pendingTasks.slice(0, 10).map((row) => (
                     <tr key={row.id}>
@@ -409,6 +434,11 @@ export default function ExecutivePage() {
                       <td style={cell}><Badge value={row.priority} /></td>
                       <td style={cell}>{dateText(row.due_at)}</td>
                       <td style={cell}><Badge value={row.status} /></td>
+                      <td style={cell}>
+                        <a href={taskHref(row)} style={taskActionLink}>
+                          تابع مع الرئيس التنفيذي
+                        </a>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -426,6 +456,7 @@ export default function ExecutivePage() {
                       <Badge value={item.severity} />
                     </div>
                     <div style={{ color: C.mint, fontSize: 10, lineHeight: 1.6, marginTop: 5 }}>{item.detail}</div>
+                    {item.cta ? <div style={{ color: C.primary, fontSize: 10, fontWeight: 800, marginTop: 7 }}>{item.cta} ←</div> : null}
                   </a>
                 ))}
               </div>
@@ -507,6 +538,21 @@ const smallLink = {
   textDecoration: "none",
   fontSize: 11,
   fontWeight: 800,
+};
+
+const taskActionLink = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: `1px solid rgba(24,213,183,.45)`,
+  borderRadius: 8,
+  padding: "6px 8px",
+  color: C.primary,
+  background: "rgba(24,213,183,.08)",
+  textDecoration: "none",
+  fontSize: 10,
+  fontWeight: 800,
+  whiteSpace: "nowrap",
 };
 
 const noticeStyle = {

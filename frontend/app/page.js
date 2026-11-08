@@ -91,6 +91,41 @@ function officeLabel(status) {
   return "متاح";
 }
 
+function taskContextFromParams(params) {
+  const taskId = params.get("task_id") || "";
+  const title = params.get("task_title") || "المهمة المعلقة";
+  const description = params.get("task_description") || "";
+  const rawStatus = params.get("task_status") || "pending";
+  const status = {
+    pending: "معلقة",
+    in_progress: "قيد التنفيذ",
+    completed: "مكتملة",
+    cancelled: "ملغاة",
+  }[rawStatus] || rawStatus;
+  const priority = params.get("task_priority") || "غير محددة";
+  const due = params.get("task_due") || "غير محدد";
+  const agent = params.get("task_agent") || "غير محدد";
+
+  const lines = [
+    "أبيك تكمل المهمة المعلقة التالية عبر الإدارات المناسبة.",
+    `عنوان المهمة: ${title}`,
+    taskId ? `رقم المهمة: ${taskId}` : null,
+    description ? `وصف المهمة: ${description}` : null,
+    `الحالة الحالية: ${status}`,
+    `الأولوية: ${priority}`,
+    `موعد الاستحقاق: ${due}`,
+    `الوكيل المسجل: ${agent}`,
+    "افحص ما تم إنجازه في النظام أولاً، ثم نفّذ الخطوة التالية ضمن صلاحياتك.",
+    "لا تعتبر المهمة مكتملة إلا بدليل تنفيذ فعلي. إذا احتجت اعتمادي أو كان الإجراء خارجياً، توقف واطلب قراري بوضوح. لا ترسل أي شيء خارجياً من نفسك.",
+  ].filter(Boolean);
+
+  return {
+    id: taskId,
+    title,
+    prompt: lines.join("\n"),
+  };
+}
+
 export default function Home() {
   const [message, setMessage] = useState("");
   const [conversationId, setConversationId] =
@@ -116,6 +151,8 @@ export default function Home() {
     useState(false);
   const [error, setError] =
     useState("");
+  const [taskContext, setTaskContext] =
+    useState(null);
 
   const officeMap = useMemo(() => {
     const value = {};
@@ -205,6 +242,31 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(
+      window.location.search
+    );
+
+    if (
+      !params.get("task_id")
+      && !params.get("task_title")
+    ) {
+      return;
+    }
+
+    const context = taskContextFromParams(params);
+    setTaskContext(context);
+    setMessage(context.prompt);
+
+    // Keep the handoff message in the composer without leaving
+    // a long task payload in the browser URL or conversation history.
+    window.history.replaceState(
+      {},
+      "",
+      window.location.pathname
+    );
+  }, []);
+
   async function loadAttachments(id) {
     if (!id) {
       setAttachments([]);
@@ -275,6 +337,7 @@ export default function Home() {
     setConversationId(null);
     setMessages([]);
     setMessage("");
+    setTaskContext(null);
     setPendingFiles([]);
     setAttachments([]);
     setLocalBusy([]);
@@ -448,6 +511,8 @@ export default function Home() {
         await loadConversations();
       }
 
+      setTaskContext(null);
+
       await Promise.all([
         loadAttachments(
           data.conversation_id
@@ -592,6 +657,17 @@ export default function Home() {
         .assistant .bubble{background:#0a3943;border:1px solid rgba(87,218,207,.18)}
         .typing{font-size:12px;color:#72e2d5}
         .composerBox{padding:15px;border-top:1px solid rgba(70,205,195,.14)}
+        .taskHandoff{
+          display:flex;align-items:center;justify-content:space-between;gap:10px;
+          margin-bottom:9px;padding:9px 11px;border-radius:10px;
+          background:rgba(24,213,183,.08);border:1px solid rgba(70,205,195,.28);
+          color:#cffff9;font-size:11px;line-height:1.7
+        }
+        .taskHandoff strong{color:#fff}
+        .taskHandoff button{
+          border:1px solid rgba(255,255,255,.18);border-radius:7px;
+          padding:4px 8px;color:#b9d8d6;background:transparent;cursor:pointer;font-size:10px
+        }
         .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px}
         .chip{
           padding:6px 9px;border-radius:8px;font-size:11px;text-decoration:none;color:#e3fffb;
@@ -1036,6 +1112,25 @@ export default function Home() {
           </div>
 
           <div className="composerBox">
+            {taskContext ? (
+              <div className="taskHandoff" role="status">
+                <span>
+                  تم تحميل المهمة للمحادثة: <strong>{taskContext.title}</strong>
+                  <br />
+                  راجع الرسالة الجاهزة ثم أرسلها للرئيس التنفيذي.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTaskContext(null);
+                    setMessage("");
+                  }}
+                >
+                  إلغاء
+                </button>
+              </div>
+            ) : null}
+
             {(
               pendingFiles.length
               || attachments.length
