@@ -544,6 +544,21 @@ export default function Home() {
           color:#cffff9;background:rgba(19,102,101,.18);
           border-radius:10px;padding:10px 14px;cursor:pointer
         }
+        .topLinks{
+          display:flex;align-items:center;justify-content:center;gap:8px;
+          flex-wrap:wrap
+        }
+        .topLink{
+          display:inline-flex;align-items:center;justify-content:center;
+          min-height:46px;padding:8px 18px;border:2px solid #f1e900;
+          border-radius:0;color:#f7ef00;background:rgba(241,233,0,.035);
+          text-decoration:none;font-weight:900;font-size:15px;white-space:nowrap;
+          transition:background .18s ease,box-shadow .18s ease,transform .18s ease
+        }
+        .topLink:hover,.topLink:focus-visible{
+          background:rgba(241,233,0,.12);box-shadow:0 0 0 3px rgba(241,233,0,.08),0 0 18px rgba(241,233,0,.18);
+          transform:translateY(-1px);outline:none
+        }
         .layout{
           max-width:1550px;margin:auto;
           display:grid;grid-template-columns:minmax(0,1fr) 400px;
@@ -921,12 +936,20 @@ export default function Home() {
           </div>
         </div>
 
-        <button
-          className="new"
-          onClick={newConversation}
-        >
-          + محادثة جديدة
-        </button>
+        <nav className="topLinks" aria-label="التنقل التنفيذي">
+          <a className="topLink" href="/executive">
+            الصفحة التنفيذية
+          </a>
+          <a className="topLink" href="/dashboards-reports">
+            الداشبورد والتقارير
+          </a>
+          <button
+            className="new"
+            onClick={newConversation}
+          >
+            + محادثة جديدة
+          </button>
+        </nav>
       </header>
 
       {error ? (

@@ -157,7 +157,14 @@ const UTILITIES = [
 ];
 
 function currentOffice(pathname) {
-  if (pathname === "/dashboard" || pathname.startsWith("/dashboard/")) {
+  if (
+    pathname === "/dashboard" ||
+    pathname.startsWith("/dashboard/") ||
+    pathname === "/executive" ||
+    pathname.startsWith("/executive/") ||
+    pathname === "/dashboards-reports" ||
+    pathname.startsWith("/dashboards-reports/")
+  ) {
     return OFFICES[0];
   }
 
@@ -195,6 +202,38 @@ function contextForPath(pathname) {
       href: "/company-control",
       description: "مرجع الشركة، الأدوار، الصلاحيات ومصفوفة الحوكمة.",
       links: [{ href: "/company-control", label: "مركز الحوكمة" }],
+    };
+  }
+
+  if (pathname.startsWith("/executive")) {
+    return {
+      slug: "ceo",
+      short: "CEO",
+      ar: "الصفحة التنفيذية",
+      en: "Executive Office",
+      href: "/executive",
+      description: "المهام المعلقة، إجراءات الرئيس التنفيذي، والتقارير اليومية والأسبوعية والشهرية.",
+      links: [
+        { href: "/executive", label: "الصفحة التنفيذية" },
+        { href: "/dashboards-reports", label: "الداشبورد والتقارير" },
+        { href: "/dashboard", label: "لوحة القيادة الحالية" },
+      ],
+    };
+  }
+
+  if (pathname.startsWith("/dashboards-reports")) {
+    return {
+      slug: "ceo",
+      short: "RPT",
+      ar: "الداشبورد والتقارير",
+      en: "Dashboards & Reports",
+      href: "/dashboards-reports",
+      description: "مؤشرات وجداول موحدة تلخص الأعمال والموارد البشرية والمبيعات والمالية والخدمات الحكومية.",
+      links: [
+        { href: "/dashboards-reports", label: "الداشبورد والتقارير" },
+        { href: "/executive", label: "الصفحة التنفيذية" },
+        { href: "/finance/reports", label: "تقارير المالية" },
+      ],
     };
   }
 
