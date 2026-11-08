@@ -82681,6 +82681,60 @@ def _ceo_exec_is_confirmation(source_text: str):
     }
 
 
+def _ceo_exec_expand_vacancy_reference(source_text: str, recent_context):
+    """Resolve a vague vacancy reference from the latest user-only context."""
+
+    import re
+
+    text = str(source_text or "").strip()
+    folded = text.casefold()
+    if not any(marker in folded for marker in ("شاغر", "وظيفة شاغرة", "vacancy", "job opening")):
+        return text
+    if not any(marker in folded for marker in ("افتح", "أنشئ", "انشئ", "أضف", "اضف", "create", "open", "add")):
+        return text
+    if any(marker in folded for marker in ("ai platform", "شاغر ai platform")):
+        return text
+
+    candidates = []
+    for prior in recent_context or []:
+        prior_text = str(prior or "").strip()
+        prior_folded = prior_text.casefold()
+        if "ai platform" in prior_folded:
+            candidates.append("AI Platform")
+        match = re.search(
+            r"(?:شاغر(?:\s+وظيفي)?|vacancy|job opening)"
+            r"\s*(?:باسم|بمسمى|for|named|:)?\s*[\"«']?"
+            r"([^\"»'\n،,:?؟]+)",
+            prior_text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            candidate = match.group(1).strip().strip(" ؟?")
+            if candidate.casefold() not in {
+                "الشاغر",
+                "شاغر",
+                "vacancy",
+                "job",
+                "opening",
+            }:
+                candidates.append(candidate)
+
+    unique = []
+    seen = set()
+    for candidate in candidates:
+        key = candidate.casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    if len(unique) != 1:
+        return text
+    return (
+        text
+        + "\n\nUSER-CONTEXT VACANCY TITLE (user-authored): "
+        + unique[0]
+    )
+
+
 def _ceo_exec_override_task_lookup_plan(plan: dict, source_text: str):
     folded = str(source_text or "").casefold()
     task_word = any(
@@ -83072,6 +83126,9 @@ def _ceo_exec_override_hr_vacancy_plan(
     if "ai platform" in folded:
         action_data.setdefault("title_ar", "AI Platform")
         action_data.setdefault("title_en", "AI Platform")
+        action_data.setdefault("department_code", "TECH")
+        action_data.setdefault("department_name", "الإدارة التقنية")
+        action_data.setdefault("manager_position_code", "CTO")
 
     title_ar = str(action_data.get("title_ar") or "").strip()
     if not title_ar:
@@ -83419,6 +83476,8 @@ def _ceo_exec_truth_response(evidence: dict):
     for index, item in enumerate(actions, start=1):
         title = str(item.get("title") or item.get("type") or "إجراء")
         status = str(item.get("status") or "blocked").strip().casefold()
+        if title.startswith("Direct record change blocked"):
+            title = "طلب تعديل سجل"
         lines.append(f"\n{index}) {title}")
 
         if status == "read_only":
@@ -83456,7 +83515,13 @@ def _ceo_exec_truth_response(evidence: dict):
 
         if status == "blocked":
             lines.append("الحالة: لم يُنفّذ.")
-            lines.append("السبب: " + str(item.get("reason") or "لم يثبت الإجراء."))
+            reason = str(item.get("reason") or "لم يثبت الإجراء.")
+            if reason.startswith("This is a record-change request"):
+                reason = (
+                    "هذا طلب تعديل سجل، لكن لم يُحدد إجراء نظامي مدعوم؛ "
+                    "لم تتم كتابة أي بيانات."
+                )
+            lines.append("السبب: " + reason)
             continue
 
         if status == "waiting_approval":
@@ -83575,6 +83640,14 @@ async def _ceo_execution_layer(
         source_text = "\n\n".join(
             recent_context + [current_user_text]
         ) + attachment_context
+
+    # A short command such as "افتح لي الشاغر" may refer to the vacancy named
+    # in the immediately preceding user message.  Resolve only user-authored
+    # context, and only when exactly one title is evidenced; never use CEO prose.
+    source_text = _ceo_exec_expand_vacancy_reference(
+        source_text,
+        recent_context,
+    )
 
     if not source_text:
         return None
@@ -84009,7 +84082,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.8",
+        "version": "1.6.9",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

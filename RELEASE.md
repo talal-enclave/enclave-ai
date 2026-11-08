@@ -1,3 +1,18 @@
+# Enclave v1.6.9 — Context-aware truthful execution
+
+This release fixes the over-blocking case where a clear follow-up such as
+“open the vacancy” referred to the single vacancy named in the immediately
+preceding user message.
+
+- Vacancy mutation commands may resolve a title only from the latest
+  user-authored context, and only when exactly one title is evidenced.
+- The known AI Platform follow-up uses the existing TECH/CTO internal mapping;
+  the live write still verifies the persisted HRVacancy record before success.
+- Ambiguous references remain blocked and ask for the exact title instead of
+  guessing. CEO blocked responses are rendered in Arabic with the actual reason.
+
+---
+
 # Enclave v1.6.8 — Canonical evidence firewall
 
 This release closes the remaining mismatch where the CEO's live vacancy read
