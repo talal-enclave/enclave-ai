@@ -2114,6 +2114,8 @@ async def chat_with_agent(
                       "- Only ask a question when a required field or source document is genuinely missing. Ask for the smallest exact missing input, not a choice between workflows.\n"
                       "- If the user confirms a prior recommendation with words such as نعم، موافق، أوافق، 1 or أ، continue the previously selected path using the recent conversation context. Do not restart the decision.\n"
                       "- A request for an Excel/Word/PDF template is an execution request. Generate and attach the file when a supported template action exists.\n"
+                      "- In this private single-user system, a direct authenticated instruction is sufficient authorization for internal drafts and internal registry actions. Never ask the user to provide a written delegation to the CEO for work inside Enclave.\n"
+                      "- Adding people from the workers template as external_worker/non_employee records is an internal registry action. It does not activate formal employment, payroll, GOSI, payments or external communication. Execute it when the user asks.\n"
                 )
 
                 orchestration_input = (
@@ -2279,6 +2281,15 @@ async def chat_with_agent(
         # CEO ORCHESTRATION AUTO-TASK GUARD v1.1.0
         if (
             agent.slug == "ceo"
+            and _ceo_exec_is_non_employee_worker_request(
+                request.message + "\n" + ceo_attachment_context
+            )
+        ):
+            approval_gate_for_task = {
+                "internal_non_employee_registry": True,
+            }
+        elif (
+            agent.slug == "ceo"
             and ceo_orchestration
             and ceo_orchestration.get("delegated")
         ):
@@ -2363,10 +2374,18 @@ async def chat_with_agent(
     # Automatically create an approval request when the user
     # asks for a sensitive or consequential external action.
     try:
-        approval_candidate = await extract_approval_candidate(
-            request.message,
-            agent.slug,
-        )
+        if (
+            agent.slug == "ceo"
+            and _ceo_exec_is_non_employee_worker_request(
+                request.message + "\n" + ceo_attachment_context
+            )
+        ):
+            approval_candidate = None
+        else:
+            approval_candidate = await extract_approval_candidate(
+                request.message,
+                agent.slug,
+            )
 
         if approval_candidate:
             # Prevent duplicate pending approvals with the same
@@ -78414,6 +78433,7 @@ _CEO_EXEC_ACTIONS = {
     "generate_technical_proposal_artifacts",
     "list_pending_tasks",
     "generate_workers_template",
+    "register_non_employee_workers",
     "get_client_state",
     "get_proposal_readiness",
     "get_finance_status",
@@ -78623,6 +78643,465 @@ async def _ceo_exec_generate_workers_template(
         "artifact": _hr_attachment_payload(row),
         "employee_records_created": False,
         "external_send": False,
+    }
+
+
+def _ceo_worker_value(value):
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value).strip()
+
+
+def _ceo_worker_field(header):
+    folded = " ".join(
+        str(header or "")
+        .strip()
+        .casefold()
+        .replace("/", " ")
+        .replace("-", " ")
+        .split()
+    )
+
+    aliases = (
+        (("رقم", " id"), "worker_id"),
+        (("full name", "الاسم الكامل"), "full_name"),
+        (("preferred name", "الاسم المختصر"), "preferred_name"),
+        (("role", "title", "المسمى الوظيفي"), "role"),
+        (("department", "القسم"), "department"),
+        (("engagement status", "حالة التعاقد"), "engagement_status"),
+        (("start date", "تاريخ بدء العمل"), "start_date"),
+        (("weekly hours", "الساعات الأسبوعية"), "weekly_hours"),
+        (("rate", "معدل الأجر"), "rate"),
+        (("id passport", "الهوية جواز السفر"), "id_passport"),
+        (("nationality", "الجنسية"), "nationality"),
+        (("mobile", "mobile phone", "رقم الجوال"), "mobile"),
+        (("email", "البريد الإلكتروني"), "email"),
+        (("emergency contact", "جهة اتصال للطوارئ"), "emergency_contact"),
+        (("required documents", "المستندات المطلوبة"), "required_documents"),
+        (("documents received", "المستندات المستلمة"), "documents_received"),
+        (("onboarding status", "حالة الانضمام"), "onboarding_status"),
+        (("notes", "ملاحظات"), "notes"),
+    )
+
+    for markers, field in aliases:
+        if any(marker in folded for marker in markers):
+            return field
+
+    return None
+
+
+def _ceo_read_workers_spreadsheet(content, extension):
+    from io import BytesIO, StringIO
+    import csv
+
+    if extension == ".xlsx":
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(
+            filename=BytesIO(content),
+            read_only=True,
+            data_only=True,
+        )
+        rows = list(workbook.active.iter_rows(values_only=True))
+        workbook.close()
+    elif extension == ".csv":
+        text = content.decode("utf-8-sig", errors="replace")
+        rows = list(csv.reader(StringIO(text)))
+    else:
+        raise ValueError(
+            "Legacy XLS files must be saved as XLSX before importing workers."
+        )
+
+    if not rows:
+        raise ValueError("The workers file contains no rows.")
+
+    header_fields = [
+        _ceo_worker_field(value)
+        for value in rows[0]
+    ]
+
+    if "full_name" not in header_fields:
+        raise ValueError("The workers file must include a Full Name column.")
+
+    output = []
+    for row_number, raw_row in enumerate(rows[1:], start=2):
+        values = [
+            _ceo_worker_value(value)
+            for value in raw_row
+        ]
+
+        if not any(values):
+            continue
+
+        record = {}
+        for index, field in enumerate(header_fields):
+            if field and index < len(values):
+                record[field] = values[index]
+
+        record["source_row_number"] = row_number
+        output.append(record)
+
+    return output
+
+
+def _ceo_exec_is_non_employee_worker_request(source_text):
+    folded = str(source_text or "").casefold()
+    action_markers = (
+        "أضف",
+        "اضف",
+        "ضيف",
+        "ضف",
+        "سجل",
+        "سجّل",
+        "استورد",
+        "ادخل",
+        "أدخل",
+        "اعتمد",
+        "نفذ",
+        "نفّذ",
+        "add",
+        "register",
+        "import",
+        "save",
+        "create",
+    )
+    worker_markers = (
+        "غير موظف",
+        "موظفين رسمي",
+        "موظف رسمي",
+        "عاملين",
+        "العاملين",
+        "يشتغلون",
+        "يشتغل",
+        "non-employee",
+        "non employee",
+        "external worker",
+        "worker",
+        "workers",
+        "contributor",
+    )
+    file_markers = (
+        ".xlsx",
+        ".xls",
+        ".csv",
+        "نموذج اكسل",
+        "نموذج إكسل",
+        "ملف اكسل",
+        "ملف إكسل",
+        "من الملف",
+        "المرفق",
+        "attached",
+        "attachment",
+    )
+
+    return (
+        any(marker in folded for marker in action_markers)
+        and any(marker in folded for marker in worker_markers)
+        and any(marker in folded for marker in file_markers)
+    )
+
+
+async def _ceo_exec_register_non_employee_workers(
+    db: AsyncSession,
+    conversation_id,
+    source_text,
+):
+    if not conversation_id:
+        return {
+            "status": "blocked",
+            "reason": "A CEO conversation is required to import the workers file.",
+        }
+
+    attachments = (
+        await db.execute(
+            select(HRAttachment).where(
+                HRAttachment.module == "ceo_chat",
+                HRAttachment.entity_type == "conversation",
+                HRAttachment.entity_id == conversation_id,
+                HRAttachment.status == "active",
+                HRAttachment.uploaded_by != "CEO Artifact Engine",
+            ).order_by(HRAttachment.created_at.desc())
+        )
+    ).scalars().all()
+
+    attachment = next(
+        (
+            item
+            for item in attachments
+            if (
+                item.file_extension or ""
+            ).lower() in {".xlsx", ".xls", ".csv"}
+        ),
+        None,
+    )
+
+    if attachment is None:
+        return {
+            "status": "blocked",
+            "reason": (
+                "Attach the completed workers XLSX/CSV file in this CEO conversation."
+            ),
+        }
+
+    extension = (attachment.file_extension or "").lower()
+    target = _ceo_attachment_storage_target(attachment.storage_key)
+
+    if not target.exists():
+        return {
+            "status": "blocked",
+            "reason": "The attached workers file is missing from private storage.",
+        }
+
+    try:
+        records = _ceo_read_workers_spreadsheet(
+            target.read_bytes(),
+            extension,
+        )
+    except Exception as exc:
+        return {
+            "status": "blocked",
+            "reason": str(exc)[:500],
+        }
+
+    if not records:
+        return {
+            "status": "blocked",
+            "reason": "The workers file contains no completed worker rows.",
+        }
+
+    existing_employees = (
+        await db.execute(select(HREmployee))
+    ).scalars().all()
+    existing_by_number = {
+        str(row.employee_number).strip().casefold(): row
+        for row in existing_employees
+        if row.employee_number
+    }
+    existing_by_source = {}
+
+    for row in existing_employees:
+        metadata = getattr(row, "employee_metadata", None) or {}
+        if not isinstance(metadata, dict):
+            continue
+        if metadata.get("record_type") != "non_employee_worker":
+            continue
+        source_row_number = int(
+            metadata.get("source_row_number") or 0
+        )
+        source_attachment_id = str(
+            metadata.get("source_attachment_id") or ""
+        )
+        source_attachment_sha256 = str(
+            metadata.get("source_attachment_sha256") or ""
+        )
+        if source_attachment_id:
+            existing_by_source[
+                ("id:" + source_attachment_id, source_row_number)
+            ] = row
+        if source_attachment_sha256:
+            existing_by_source[
+                ("sha256:" + source_attachment_sha256, source_row_number)
+            ] = row
+
+    seen_numbers = set()
+    prepared = []
+    validation_errors = []
+
+    for record in records:
+        row_number = int(record["source_row_number"])
+        full_name = str(record.get("full_name") or "").strip()
+
+        if not full_name:
+            validation_errors.append(
+                f"Row {row_number}: Full Name is required."
+            )
+            continue
+
+        worker_id = str(record.get("worker_id") or "").strip()
+        if not worker_id:
+            import hashlib
+
+            seed = (
+                f"{attachment.id}:{row_number}:{full_name}:"
+                f"{record.get('mobile') or ''}"
+            )
+            worker_id = (
+                "NW-"
+                + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:10].upper()
+            )
+
+        folded_id = worker_id.casefold()
+        if folded_id in seen_numbers:
+            validation_errors.append(
+                f"Row {row_number}: duplicate worker ID {worker_id}."
+            )
+            continue
+        seen_numbers.add(folded_id)
+
+        source_existing = (
+            existing_by_source.get(
+                ("id:" + str(attachment.id), row_number)
+            )
+            or existing_by_source.get(
+                ("sha256:" + str(attachment.sha256), row_number)
+            )
+        )
+        number_existing = existing_by_number.get(folded_id)
+
+        if number_existing and number_existing is not source_existing:
+            validation_errors.append(
+                f"Row {row_number}: worker ID {worker_id} already exists."
+            )
+            continue
+
+        prepared.append(
+            (
+                record,
+                worker_id,
+                source_existing,
+            )
+        )
+
+    if validation_errors:
+        return {
+            "status": "blocked",
+            "reason": "\n".join(validation_errors[:20]),
+            "validation_error_count": len(validation_errors),
+        }
+
+    created = []
+    reused = []
+    warnings = []
+
+    for record, worker_id, source_existing in prepared:
+        row_number = int(record["source_row_number"])
+
+        if source_existing is not None:
+            reused.append(
+                {
+                    "id": str(source_existing.id),
+                    "worker_id": source_existing.employee_number,
+                    "full_name": source_existing.full_name_ar,
+                    "status": source_existing.employment_status,
+                }
+            )
+            continue
+
+        start_date = None
+        if record.get("start_date"):
+            try:
+                start_date = _di_date.fromisoformat(
+                    _di_parse_date(record["start_date"])
+                )
+            except Exception:
+                warnings.append(
+                    f"Row {row_number}: start date was kept in metadata because it was not recognized."
+                )
+
+        role = str(record.get("role") or "").strip()
+        department = str(record.get("department") or "").strip()
+        engagement_status = str(
+            record.get("engagement_status") or ""
+        ).strip()
+        notes = str(record.get("notes") or "").strip()
+        registry_note = (
+            "Non-employee worker registry record. "
+            "Not a formal employee; no employment contract, payroll, GOSI "
+            "registration or external communication was created."
+        )
+        if notes:
+            registry_note += " Notes: " + notes
+
+        employee = HREmployee(
+            employee_number=worker_id,
+            full_name_ar=str(record.get("full_name") or "").strip(),
+            full_name_en=(
+                str(record.get("preferred_name") or "").strip()
+                or None
+            ),
+            national_id_or_iqama=(
+                str(record.get("id_passport") or "").strip()
+                or None
+            ),
+            nationality=(
+                str(record.get("nationality") or "").strip()
+                or None
+            ),
+            work_email=(
+                str(record.get("email") or "").strip()
+                or None
+            ),
+            mobile=(
+                str(record.get("mobile") or "").strip()
+                or None
+            ),
+            hire_date=start_date,
+            employment_status="external_worker",
+            employment_type="non_employee",
+            gosi_registered=False,
+            notes=registry_note,
+            employee_metadata={
+                "record_type": "non_employee_worker",
+                "source": "ceo_chat_workers_template",
+                "source_attachment_id": str(attachment.id),
+                "source_attachment_sha256": attachment.sha256,
+                "source_file_name": attachment.original_file_name,
+                "source_row_number": row_number,
+                "role": role or None,
+                "department": department or None,
+                "engagement_status": engagement_status or None,
+                "weekly_hours": record.get("weekly_hours") or None,
+                "rate": record.get("rate") or None,
+                "emergency_contact": record.get("emergency_contact") or None,
+                "required_documents": record.get("required_documents") or None,
+                "documents_received": record.get("documents_received") or None,
+                "onboarding_status": record.get("onboarding_status") or None,
+                "start_date_source": record.get("start_date") or None,
+            },
+        )
+
+        db.add(employee)
+        await db.flush()
+        created.append(
+            {
+                "id": str(employee.id),
+                "worker_id": worker_id,
+                "full_name": employee.full_name_ar,
+                "status": employee.employment_status,
+            }
+        )
+
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="ceo.non_employee_workers.registered",
+        details={
+            "conversation_id": str(conversation_id),
+            "attachment_id": str(attachment.id),
+            "attachment_file_name": attachment.original_file_name,
+            "created_count": len(created),
+            "reused_count": len(reused),
+            "formal_employee_records_created": False,
+            "payroll_activated": False,
+            "gosi_registered": False,
+        },
+    )
+
+    return {
+        "status": "executed",
+        "operation": "non_employee_workers_registered",
+        "attachment": _hr_attachment_payload(attachment),
+        "created_count": len(created),
+        "reused_count": len(reused),
+        "records": created + reused,
+        "warnings": warnings,
+        "formal_employee_records_created": False,
+        "payroll_activated": False,
+        "gosi_registered": False,
+        "external_send": False,
+        "approval_required": False,
     }
 
 
@@ -79758,6 +80237,17 @@ async def _ceo_exec_action(
             **generated,
         }
 
+    if action_type == "register_non_employee_workers":
+        registered = await _ceo_exec_register_non_employee_workers(
+            db,
+            conversation_id,
+            source_text,
+        )
+        return {
+            **base,
+            **registered,
+        }
+
     if action_type == "get_finance_status":
         return {
             **base,
@@ -80752,6 +81242,14 @@ def _ceo_exec_is_confirmation(source_text: str):
         "approved",
         "proceed",
         "go ahead",
+        "أنا المدير",
+        "انا المدير",
+        "أنا مديره",
+        "انا مديره",
+        "أنا صاحب الصلاحية",
+        "انا صاحب الصلاحية",
+        "لا يحتاج تفويض",
+        "ما يحتاج تفويض",
     }
 
 
@@ -80851,6 +81349,30 @@ def _ceo_exec_override_workers_template_plan(plan: dict, source_text: str):
     }
 
 
+def _ceo_exec_override_non_employee_workers_plan(
+    plan: dict,
+    source_text: str,
+):
+    if not _ceo_exec_is_non_employee_worker_request(source_text):
+        return plan
+
+    return {
+        "handled": True,
+        "title": "Register non-employee workers",
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "register_non_employee_workers",
+                "agent_slug": "ceo",
+                "title": "Register workers as non-employee contributors",
+                "data": {},
+            }
+        ],
+        "routing": "deterministic_non_employee_worker_register",
+    }
+
+
 async def _ceo_execution_layer(
     db: AsyncSession,
     source_text: str,
@@ -80858,6 +81380,17 @@ async def _ceo_execution_layer(
     conversation_context=None,
 ):
     current_source = str(source_text or "").strip()
+    attachment_marker = "\n\nATTACHED DOCUMENTS FOR THIS CEO CONVERSATION"
+    source_parts = current_source.split(
+        attachment_marker,
+        1,
+    )
+    current_user_text = source_parts[0].strip()
+    attachment_context = (
+        attachment_marker + source_parts[1]
+        if len(source_parts) == 2
+        else ""
+    )
     recent_context = [
         str(item).strip()
         for item in (conversation_context or [])
@@ -80869,8 +81402,10 @@ async def _ceo_execution_layer(
     # A short confirmation refers to the immediately preceding user request.
     # Rehydrate only user-authored context so assistant prose cannot become
     # invented business evidence.
-    if _ceo_exec_is_confirmation(current_source) and recent_context:
-        source_text = "\n\n".join(recent_context + [current_source])
+    if _ceo_exec_is_confirmation(current_user_text) and recent_context:
+        source_text = "\n\n".join(
+            recent_context + [current_user_text]
+        ) + attachment_context
 
     if not source_text:
         return None
@@ -80926,6 +81461,13 @@ async def _ceo_execution_layer(
         "template to list people or contributors who work with Enclave but are "
         "not formal employees; generate and attach the file immediately and do "
         "not create employee records. "
+        "Use register_non_employee_workers when the user explicitly asks to add, "
+        "register or import people from the attached workers XLSX/CSV template. "
+        "This is an internal non-employee registry action authorized by the "
+        "authenticated single user; never ask for a written delegation. Store "
+        "them as external_worker/non_employee records only. Do not create a "
+        "formal employment contract, payroll entry, GOSI registration, payment "
+        "or external communication. "
         "Use get_finance_status for finance/billing status, "
         "get_accountability for named-person status. When the named person "
         "is Fahad Al-Anzi, treat him as an external commercial contributor "
@@ -81035,6 +81577,11 @@ async def _ceo_execution_layer(
     )
 
     plan = _ceo_exec_override_task_lookup_plan(
+        plan,
+        source_text,
+    )
+
+    plan = _ceo_exec_override_non_employee_workers_plan(
         plan,
         source_text,
     )
@@ -81162,7 +81709,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.1",
+        "version": "1.6.2",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
