@@ -1191,7 +1191,7 @@ export default function Home() {
                 <input
                   type="file"
                   multiple
-                  accept=".pdf,.docx,.txt,.csv"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.ppt,.pptx,.png,.jpg,.jpeg,.webp"
                   disabled={
                     loading || uploading
                   }

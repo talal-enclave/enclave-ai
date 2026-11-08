@@ -1,22 +1,19 @@
-# Enclave v1.6.0 — CEO execution-first behavior
+# Enclave v1.6.1 — Excel and PowerPoint attachment support
 
-This release corrects the CEO Agent interaction contract after the read-only
-conversation diagnostic showed repeated A/B menus, re-opening of already
-approved decisions, and failure to generate the requested workers XLSX file.
+This release makes the CEO conversation accept the same safe office formats
+already supported by the unified attachment backend.
 
-Changes:
+- CEO chat file selection now accepts Word, Excel, PowerPoint, CSV, text and
+  common image formats.
+- Modern `.xlsx` and `.pptx` files are stored as conversation attachments and
+  their readable text is included in the CEO source context.
+- Legacy `.xls` and `.ppt` files are accepted and stored; they remain available
+  for download even when text extraction is not possible.
+- The existing 20 MB limit, executable-signature checks, private attachment
+  storage and audit logging remain active.
+- The CEO execution-first behavior from v1.6.0 is preserved when this release
+  is applied on top of v1.6.0. If v1.6.0 has not been installed yet, the
+  bundled backend includes that behavior as well.
 
-- Replaces the persisted CEO prompt that forced exactly two options for every
-  request with an execution-first contract.
-- Treats clear instructions, confirmations and task handoffs as commands to
-  execute; asks only for the smallest genuinely missing input.
-- Adds a live read-only pending/in-progress task lookup for the CEO chat.
-- Adds an idempotent bilingual `TalalEnclave_Workers_Template.xlsx` generator
-  for non-employee contributors. It attaches the file to the conversation and
-  does not create employee records.
-- Uses recent user-authored context to continue a short confirmation such as
-  `موافق`, `أوافق`, `1` or `أ` without reopening the previous decision.
-- Keeps external sending, payment, banking, filing and other external effects
-  approval-gated.
-
-No operational data is reset or deleted by this release.
+No operational records, government records or existing attachments are reset,
+deleted or rewritten by this release.

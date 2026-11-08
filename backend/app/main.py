@@ -77952,6 +77952,8 @@ _CEO_ATTACHMENT_TEXT_EXTENSIONS = {
     ".docx",
     ".txt",
     ".csv",
+    ".xlsx",
+    ".pptx",
 }
 _CEO_ATTACHMENT_MAX_FILES = 10
 _CEO_ATTACHMENT_MAX_PER_FILE_CHARS = 30000
@@ -77976,6 +77978,118 @@ def _ceo_attachment_storage_target(storage_key: str):
         )
 
     return target
+
+
+def _ceo_extract_office_xml_text(
+    content: bytes,
+    extension: str,
+):
+    """Extract readable text from modern Excel/PowerPoint OOXML files.
+
+    This deliberately uses the standard-library ZIP/XML readers so accepting
+    these formats does not require a new runtime dependency. Legacy binary
+    .xls/.ppt files remain storable but are reported as non-extractable.
+    """
+
+    from io import BytesIO
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    with zipfile.ZipFile(BytesIO(content)) as archive:
+        names = set(archive.namelist())
+
+        if extension == ".xlsx":
+            namespace = {
+                "main": (
+                    "http://schemas.openxmlformats.org/"
+                    "spreadsheetml/2006/main"
+                )
+            }
+            shared_strings = []
+
+            if "xl/sharedStrings.xml" in names:
+                shared_root = ET.fromstring(
+                    archive.read("xl/sharedStrings.xml")
+                )
+                for item in shared_root.findall("main:si", namespace):
+                    shared_strings.append(
+                        "".join(
+                            node.text or ""
+                            for node in item.findall(
+                                ".//main:t",
+                                namespace,
+                            )
+                        )
+                    )
+
+            chunks = []
+            for name in sorted(names):
+                if not (
+                    name.startswith("xl/worksheets/")
+                    and name.endswith(".xml")
+                ):
+                    continue
+
+                root = ET.fromstring(archive.read(name))
+                for row in root.findall(".//main:row", namespace):
+                    values = []
+                    for cell in row.findall("main:c", namespace):
+                        value = cell.find("main:v", namespace)
+                        inline = cell.find("main:is", namespace)
+                        cell_value = ""
+
+                        if inline is not None:
+                            cell_value = "".join(
+                                node.text or ""
+                                for node in inline.findall(
+                                    ".//main:t",
+                                    namespace,
+                                )
+                            )
+                        elif value is not None and value.text:
+                            cell_value = value.text
+                            if cell.get("t") == "s":
+                                try:
+                                    cell_value = shared_strings[
+                                        int(cell_value)
+                                    ]
+                                except (
+                                    ValueError,
+                                    IndexError,
+                                ):
+                                    pass
+
+                        if cell_value:
+                            values.append(cell_value)
+
+                    if values:
+                        chunks.append(" | ".join(values))
+
+            return "\n".join(chunks).strip()
+
+        if extension == ".pptx":
+            chunks = []
+            for name in sorted(names):
+                if not (
+                    name.startswith("ppt/slides/slide")
+                    and name.endswith(".xml")
+                ):
+                    continue
+
+                root = ET.fromstring(archive.read(name))
+                texts = [
+                    node.text.strip()
+                    for node in root.iter()
+                    if node.tag.endswith("}t")
+                    and node.text
+                    and node.text.strip()
+                ]
+                if texts:
+                    chunks.append(" ".join(texts))
+
+            return "\n".join(chunks).strip()
+
+    return ""
 
 
 def _ceo_extract_stored_attachment_text(
@@ -78027,6 +78141,12 @@ def _ceo_extract_stored_attachment_text(
                 paragraph.text
                 for paragraph in document.paragraphs
             ).strip()
+
+        elif extension in {".xlsx", ".pptx"}:
+            extracted = _ceo_extract_office_xml_text(
+                content,
+                extension,
+            )
 
         else:
             extracted = content.decode(
@@ -81042,7 +81162,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.0",
+        "version": "1.6.1",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
