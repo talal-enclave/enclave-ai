@@ -2116,6 +2116,8 @@ async def chat_with_agent(
                       "- A request for an Excel/Word/PDF template is an execution request. Generate and attach the file when a supported template action exists.\n"
                       "- In this private single-user system, a direct authenticated instruction is sufficient authorization for internal drafts and internal registry actions. Never ask the user to provide a written delegation to the CEO for work inside Enclave.\n"
                       "- Adding people from the workers template as external_worker/non_employee records is an internal registry action. It does not activate formal employment, payroll, GOSI, payments or external communication. Execute it when the user asks.\n"
+                      "- Activating employees means changing existing formal HREmployee records only. Departments and positions are not employee records, and never claim employee activation when the live employee count is zero.\n"
+                      "- When the user provides a formal employee roster attachment and asks to add or activate those employees, import the actual HREmployee rows from that attachment and report their real IDs. Do not claim success from names in assistant text.\n"
                 )
 
                 orchestration_input = (
@@ -78432,6 +78434,8 @@ _CEO_EXEC_ACTIONS = {
     "create_technical_proposal",
     "generate_technical_proposal_artifacts",
     "create_organizational_structure",
+    "activate_existing_employees",
+    "register_formal_employees_from_attachment",
     "list_pending_tasks",
     "generate_workers_template",
     "register_non_employee_workers",
@@ -78841,6 +78845,558 @@ async def _ceo_exec_create_organizational_structure(
     }
 
 
+async def _ceo_exec_activate_existing_employees(
+    db: AsyncSession,
+    conversation_id,
+    source_text: str,
+):
+    """Activate only real formal employee rows already present in HR.
+
+    This action never creates a person from a position, an assistant message,
+    or an inferred leadership list.  With no persisted employee rows it must
+    return blocked, which prevents a false completion claim.
+    """
+
+    rows = (
+        await db.execute(
+            select(HREmployee).order_by(HREmployee.employee_number.asc())
+        )
+    ).scalars().all()
+
+    formal_rows = []
+    excluded_non_employee = []
+    for row in rows:
+        employment_type = str(
+            getattr(row, "employment_type", "") or ""
+        ).strip().casefold()
+        employment_status = str(
+            getattr(row, "employment_status", "") or ""
+        ).strip().casefold()
+        if employment_type in {"non_employee", "external_worker"} or employment_status in {
+            "non_employee",
+            "external_worker",
+        }:
+            excluded_non_employee.append(row)
+            continue
+        formal_rows.append(row)
+
+    if not formal_rows:
+        return {
+            "status": "blocked",
+            "operation": "employee_activation_blocked",
+            "reason": (
+                "No formal employee records exist in HR. Departments and positions "
+                "are not employees, and the system will not invent or create people "
+                "from an assistant response."
+            ),
+            "total_employee_records": len(rows),
+            "formal_employee_records": 0,
+            "excluded_non_employee_records": len(excluded_non_employee),
+            "verified": True,
+            "external_send": False,
+            "approval_required": False,
+        }
+
+    activatable_statuses = {
+        "inactive",
+        "draft",
+        "pending",
+        "onboarding",
+        "preboarding",
+        "new",
+    }
+    activated = []
+    already_active = []
+    not_eligible = []
+
+    for row in formal_rows:
+        status = str(
+            getattr(row, "employment_status", "") or ""
+        ).strip().casefold()
+        payload = {
+            "id": str(row.id),
+            "employee_number": row.employee_number,
+            "full_name_ar": row.full_name_ar,
+            "full_name_en": row.full_name_en,
+            "employment_type": row.employment_type,
+            "employment_status_before": row.employment_status,
+            "department_id": str(row.department_id) if row.department_id else None,
+            "position_id": str(row.position_id) if row.position_id else None,
+        }
+        if status == "active":
+            already_active.append(payload)
+        elif status in activatable_statuses:
+            row.employment_status = "active"
+            payload["employment_status_after"] = row.employment_status
+            activated.append(payload)
+        else:
+            payload["reason"] = "Status is not safe for automatic reactivation."
+            not_eligible.append(payload)
+
+    if not activated and not already_active:
+        return {
+            "status": "blocked",
+            "operation": "employee_activation_blocked",
+            "reason": (
+                "Formal employee records exist, but none has an eligible inactive "
+                "or onboarding status. Terminated or other non-eligible statuses "
+                "were left unchanged."
+            ),
+            "formal_employee_records": len(formal_rows),
+            "not_eligible_count": len(not_eligible),
+            "records": not_eligible,
+            "verified": True,
+            "external_send": False,
+            "approval_required": False,
+        }
+
+    await db.flush()
+
+    records = activated + already_active + not_eligible
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="ceo.existing_employees.activated",
+        details={
+            "conversation_id": str(conversation_id) if conversation_id else None,
+            "source_excerpt": str(source_text or "")[:2000],
+            "activated_count": len(activated),
+            "already_active_count": len(already_active),
+            "not_eligible_count": len(not_eligible),
+            "formal_employee_records": len(formal_rows),
+            "external_send": False,
+            "payroll_activated": False,
+            "gosi_registered": False,
+        },
+    )
+
+    return {
+        "status": "executed",
+        "operation": "existing_employee_records_activated",
+        "record_type": "hr_employee",
+        "activated_count": len(activated),
+        "already_active_count": len(already_active),
+        "not_eligible_count": len(not_eligible),
+        "records": records,
+        "verified": True,
+        "external_send": False,
+        "payroll_activated": False,
+        "gosi_registered": False,
+        "approval_required": False,
+    }
+
+
+async def _ceo_exec_register_formal_employees_from_attachment(
+    db: AsyncSession,
+    conversation_id,
+    source_text: str,
+):
+    """Import formal employee rows from the user's attached roster.
+
+    The roster is authoritative for the requested internal employee records.
+    The operation is idempotent by source row, employee number, national ID or
+    email, and it never creates payroll, contracts or GOSI registrations.
+    """
+
+    if not conversation_id:
+        return {
+            "status": "blocked",
+            "reason": "A CEO conversation is required to import the employee roster.",
+        }
+
+    attachments = (
+        await db.execute(
+            select(HRAttachment).where(
+                HRAttachment.module == "ceo_chat",
+                HRAttachment.entity_type == "conversation",
+                HRAttachment.entity_id == conversation_id,
+                HRAttachment.status == "active",
+                HRAttachment.uploaded_by != "CEO Artifact Engine",
+            ).order_by(HRAttachment.created_at.desc())
+        )
+    ).scalars().all()
+    attachment = next(
+        (
+            item
+            for item in attachments
+            if (item.file_extension or "").lower() in {".xlsx", ".xls", ".csv"}
+        ),
+        None,
+    )
+    if attachment is None:
+        return {
+            "status": "blocked",
+            "reason": "Attach the completed employee XLSX/CSV roster in this CEO conversation.",
+        }
+
+    extension = (attachment.file_extension or "").lower()
+    target = _ceo_attachment_storage_target(attachment.storage_key)
+    if not target.exists():
+        return {
+            "status": "blocked",
+            "reason": "The attached employee roster is missing from private storage.",
+        }
+
+    try:
+        records = _ceo_read_workers_spreadsheet(
+            target.read_bytes(),
+            extension,
+        )
+    except Exception as exc:
+        return {
+            "status": "blocked",
+            "reason": str(exc)[:500],
+        }
+    if not records:
+        return {
+            "status": "blocked",
+            "reason": "The employee roster contains no completed rows.",
+        }
+
+    departments = (
+        await db.execute(select(HRDepartment))
+    ).scalars().all()
+    positions = (
+        await db.execute(select(HRPosition))
+    ).scalars().all()
+    departments_by_key = {}
+    for row in departments:
+        for value in (row.code, row.name_ar, row.name_en):
+            if value:
+                departments_by_key[_ceo_org_normalize(value)] = row
+    positions_by_key = {}
+    for row in positions:
+        for value in (row.code, row.title_ar, row.title_en):
+            if value:
+                positions_by_key[_ceo_org_normalize(value)] = row
+
+    existing_employees = (
+        await db.execute(select(HREmployee))
+    ).scalars().all()
+    existing_by_number = {
+        _ceo_org_normalize(row.employee_number): row
+        for row in existing_employees
+        if row.employee_number
+    }
+    existing_by_national_id = {
+        _ceo_org_normalize(row.national_id_or_iqama): row
+        for row in existing_employees
+        if row.national_id_or_iqama
+    }
+    existing_by_email = {
+        _ceo_org_normalize(row.work_email): row
+        for row in existing_employees
+        if row.work_email
+    }
+    existing_by_source = {}
+    for row in existing_employees:
+        metadata = getattr(row, "employee_metadata", None) or {}
+        if not isinstance(metadata, dict):
+            continue
+        source_row_number = int(metadata.get("source_row_number") or 0)
+        source_attachment_id = str(metadata.get("source_attachment_id") or "")
+        source_attachment_sha256 = str(metadata.get("source_attachment_sha256") or "")
+        if source_row_number and source_attachment_id:
+            existing_by_source[("id:" + source_attachment_id, source_row_number)] = row
+        if source_row_number and source_attachment_sha256:
+            existing_by_source[("sha256:" + source_attachment_sha256, source_row_number)] = row
+
+    import hashlib
+    import re
+
+    def employee_number_for(record):
+        raw = str(record.get("worker_id") or "").strip()
+        if raw:
+            if raw.casefold().startswith("emp-"):
+                return raw.upper()
+            if re.fullmatch(r"[0-9]+", raw):
+                return "EMP-" + raw.zfill(4)
+            return "EMP-" + raw.upper()
+        seed = f"{attachment.id}:{record.get('source_row_number')}:{record.get('full_name')}"
+        return "EMP-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:10].upper()
+
+    def start_date_for(value):
+        if not value:
+            return None
+        try:
+            return _di_date.fromisoformat(_di_parse_date(value))
+        except Exception:
+            try:
+                serial = float(str(value).strip())
+                return _di_date(1899, 12, 30) + timedelta(days=int(serial))
+            except Exception:
+                return None
+
+    prepared = []
+    validation_errors = []
+    seen_numbers = set()
+    for record in records:
+        row_number = int(record.get("source_row_number") or 0)
+        full_name = str(record.get("full_name") or "").strip()
+        title = str(record.get("role") or "").strip()
+        department_text = str(record.get("department") or "").strip()
+        engagement_status = str(record.get("engagement_status") or "").strip()
+        if not full_name or not title or not department_text:
+            validation_errors.append(
+                f"Row {row_number}: Full Name, Role/Title and Department are required."
+            )
+            continue
+        if any(
+            marker in engagement_status.casefold()
+            for marker in ("غير موظف", "non-employee", "external worker")
+        ):
+            validation_errors.append(
+                f"Row {row_number}: the roster marks this person as non-employee."
+            )
+            continue
+
+        department = departments_by_key.get(_ceo_org_normalize(department_text))
+        position = positions_by_key.get(_ceo_org_normalize(title))
+        if department is None:
+            validation_errors.append(
+                f"Row {row_number}: department not found: {department_text}."
+            )
+            continue
+        if position is None:
+            validation_errors.append(
+                f"Row {row_number}: position not found: {title}."
+            )
+            continue
+        if position.department_id and position.department_id != department.id:
+            validation_errors.append(
+                f"Row {row_number}: position {title} belongs to another department."
+            )
+            continue
+
+        employee_number = employee_number_for(record)
+        folded_number = _ceo_org_normalize(employee_number)
+        if folded_number in seen_numbers:
+            validation_errors.append(
+                f"Row {row_number}: duplicate employee number {employee_number}."
+            )
+            continue
+        seen_numbers.add(folded_number)
+
+        national_id = str(record.get("id_passport") or "").strip() or None
+        email = str(record.get("email") or "").strip() or None
+        source_existing = (
+            existing_by_source.get(("id:" + str(attachment.id), row_number))
+            or existing_by_source.get(("sha256:" + str(attachment.sha256), row_number))
+        )
+        number_existing = existing_by_number.get(folded_number)
+        national_existing = (
+            existing_by_national_id.get(_ceo_org_normalize(national_id))
+            if national_id
+            else None
+        )
+        email_existing = (
+            existing_by_email.get(_ceo_org_normalize(email))
+            if email
+            else None
+        )
+        candidates = [
+            row
+            for row in (source_existing, number_existing, national_existing, email_existing)
+            if row is not None
+        ]
+        candidate_ids = {str(row.id) for row in candidates}
+        if len(candidate_ids) > 1:
+            validation_errors.append(
+                f"Row {row_number}: the roster matches more than one existing employee record."
+            )
+            continue
+        matched = candidates[0] if candidates else None
+        if matched is not None and source_existing is None:
+            if _ceo_org_normalize(matched.full_name_ar) != _ceo_org_normalize(full_name):
+                validation_errors.append(
+                    f"Row {row_number}: employee identity conflicts with an existing record."
+                )
+                continue
+
+        prepared.append(
+            {
+                "record": record,
+                "row_number": row_number,
+                "employee_number": employee_number,
+                "department": department,
+                "position": position,
+                "matched": matched,
+                "start_date": start_date_for(record.get("start_date")),
+            }
+        )
+
+    if validation_errors:
+        return {
+            "status": "blocked",
+            "reason": "\n".join(validation_errors[:20]),
+            "validation_error_count": len(validation_errors),
+            "records_created": False,
+        }
+
+    created = []
+    reused = []
+    converted = []
+    employee_by_position = {}
+    for item in prepared:
+        record = item["record"]
+        employee = item["matched"]
+        previous_type = None
+        previous_status = None
+        if employee is None:
+            employee = HREmployee(
+                employee_number=item["employee_number"],
+                full_name_ar=str(record.get("full_name") or "").strip(),
+                full_name_en=(str(record.get("preferred_name") or "").strip() or None),
+                national_id_or_iqama=(str(record.get("id_passport") or "").strip() or None),
+                nationality=(str(record.get("nationality") or "").strip() or None),
+                work_email=(str(record.get("email") or "").strip() or None),
+                mobile=(str(record.get("mobile") or "").strip() or None),
+                department_id=item["department"].id,
+                position_id=item["position"].id,
+                hire_date=item["start_date"],
+                employment_status="active",
+                employment_type="full_time",
+                gosi_registered=False,
+                notes=(
+                    "Formal internal employee registry record created from the "
+                    "user-provided roster. No employment contract, payroll or GOSI "
+                    "registration was created."
+                ),
+                employee_metadata={},
+            )
+            db.add(employee)
+            await db.flush()
+            created.append(employee)
+        else:
+            previous_type = employee.employment_type
+            previous_status = employee.employment_status
+            if previous_type in {"non_employee", "external_worker"}:
+                converted.append(employee)
+            employee.employee_number = item["employee_number"]
+            employee.full_name_ar = str(record.get("full_name") or "").strip()
+            employee.full_name_en = str(record.get("preferred_name") or "").strip() or None
+            employee.national_id_or_iqama = str(record.get("id_passport") or "").strip() or None
+            employee.nationality = str(record.get("nationality") or "").strip() or None
+            employee.work_email = str(record.get("email") or "").strip() or None
+            employee.mobile = str(record.get("mobile") or "").strip() or None
+            employee.department_id = item["department"].id
+            employee.position_id = item["position"].id
+            employee.hire_date = item["start_date"] or employee.hire_date
+            employee.employment_status = "active"
+            employee.employment_type = "full_time"
+            employee.gosi_registered = bool(employee.gosi_registered)
+            if not employee.notes:
+                employee.notes = (
+                    "Formal internal employee registry record imported from the "
+                    "user-provided roster. No employment contract, payroll or GOSI "
+                    "registration was created."
+                )
+            reused.append(employee)
+
+        metadata = getattr(employee, "employee_metadata", None) or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata.update(
+            {
+                "record_type": "formal_employee_roster",
+                "source": "ceo_chat_employee_roster",
+                "source_attachment_id": str(attachment.id),
+                "source_attachment_sha256": attachment.sha256,
+                "source_file_name": attachment.original_file_name,
+                "source_row_number": item["row_number"],
+                "role": str(record.get("role") or "").strip() or None,
+                "department": str(record.get("department") or "").strip() or None,
+                "engagement_status_source": str(record.get("engagement_status") or "").strip() or None,
+                "weekly_hours": record.get("weekly_hours") or None,
+                "rate": record.get("rate") or None,
+                "emergency_contact": record.get("emergency_contact") or None,
+                "required_documents": record.get("required_documents") or None,
+                "documents_received": record.get("documents_received") or None,
+                "onboarding_status": record.get("onboarding_status") or None,
+                "start_date_source": record.get("start_date") or None,
+                "previous_employment_type": previous_type,
+                "previous_employment_status": previous_status,
+            }
+        )
+        employee.employee_metadata = metadata
+        employee_by_position[_ceo_org_normalize(item["position"].code)] = employee
+        await db.flush()
+
+    ceo_employee = employee_by_position.get("ceo")
+    if ceo_employee is not None:
+        for position_code in ("eom", "cto", "csso"):
+            employee = employee_by_position.get(position_code)
+            if employee is not None and employee.id != ceo_employee.id:
+                employee.manager_employee_id = ceo_employee.id
+        await db.flush()
+
+    employee_ids = [row.id for row in created + reused]
+    verified_rows = (
+        await db.execute(
+            select(HREmployee).where(HREmployee.id.in_(employee_ids))
+        )
+    ).scalars().all()
+    verified = (
+        len(verified_rows) == len(employee_ids)
+        and all(row.employment_status == "active" for row in verified_rows)
+    )
+    if not verified:
+        await db.rollback()
+        return {
+            "status": "blocked",
+            "reason": "Employee roster import could not be verified after database flush.",
+            "records_created": False,
+        }
+
+    records_payload = [
+        {
+            "id": str(row.id),
+            "employee_number": row.employee_number,
+            "full_name_ar": row.full_name_ar,
+            "full_name_en": row.full_name_en,
+            "employment_status": row.employment_status,
+            "employment_type": row.employment_type,
+            "department_id": str(row.department_id) if row.department_id else None,
+            "position_id": str(row.position_id) if row.position_id else None,
+            "manager_employee_id": str(row.manager_employee_id) if row.manager_employee_id else None,
+        }
+        for row in verified_rows
+    ]
+    await write_audit_log(
+        db,
+        actor="agent:ceo",
+        action="ceo.formal_employees.imported_from_roster",
+        details={
+            "conversation_id": str(conversation_id),
+            "attachment_id": str(attachment.id),
+            "attachment_file_name": attachment.original_file_name,
+            "created_count": len(created),
+            "reused_count": len(reused),
+            "converted_non_employee_count": len(converted),
+            "records": records_payload,
+            "payroll_activated": False,
+            "gosi_registered": False,
+            "external_send": False,
+        },
+    )
+
+    return {
+        "status": "executed",
+        "operation": "formal_employees_imported_from_attachment",
+        "record_type": "hr_employee",
+        "attachment": _hr_attachment_payload(attachment),
+        "created_count": len(created),
+        "reused_count": len(reused),
+        "converted_non_employee_count": len(converted),
+        "records": records_payload,
+        "verified": True,
+        "payroll_activated": False,
+        "gosi_registered": False,
+        "external_send": False,
+        "approval_required": False,
+    }
+
+
 async def _ceo_exec_list_pending_tasks(db: AsyncSession):
     """Return the live open task register for a CEO read-only lookup."""
 
@@ -79057,8 +79613,16 @@ def _ceo_worker_field(header):
         .split()
     )
 
+    # Match the specific identity/phone headers before any generic Arabic
+    # "رقم" token.  A broad "رقم" alias causes the phone, ID/passport and
+    # emergency-contact columns to overwrite the worker ID while the row is
+    # being parsed, which can turn an otherwise valid formal roster into bad
+    # employee records.
     aliases = (
-        (("رقم", " id"), "worker_id"),
+        (("id passport", "رقم الهوية جواز السفر", "رقم الهوية", "رقم جواز السفر"), "id_passport"),
+        (("mobile phone", "رقم الجوال", "الجوال", "mobile"), "mobile"),
+        (("emergency contact", "جهة اتصال للطوارئ"), "emergency_contact"),
+        (("worker id", "employee id", "رقم id", "id"), "worker_id"),
         (("full name", "الاسم الكامل"), "full_name"),
         (("preferred name", "الاسم المختصر"), "preferred_name"),
         (("role", "title", "المسمى الوظيفي"), "role"),
@@ -79067,11 +79631,8 @@ def _ceo_worker_field(header):
         (("start date", "تاريخ بدء العمل"), "start_date"),
         (("weekly hours", "الساعات الأسبوعية"), "weekly_hours"),
         (("rate", "معدل الأجر"), "rate"),
-        (("id passport", "الهوية جواز السفر"), "id_passport"),
         (("nationality", "الجنسية"), "nationality"),
-        (("mobile", "mobile phone", "رقم الجوال"), "mobile"),
         (("email", "البريد الإلكتروني"), "email"),
-        (("emergency contact", "جهة اتصال للطوارئ"), "emergency_contact"),
         (("required documents", "المستندات المطلوبة"), "required_documents"),
         (("documents received", "المستندات المستلمة"), "documents_received"),
         (("onboarding status", "حالة الانضمام"), "onboarding_status"),
@@ -80653,6 +81214,28 @@ async def _ceo_exec_action(
             **structure,
         }
 
+    if action_type == "activate_existing_employees":
+        activation = await _ceo_exec_activate_existing_employees(
+            db,
+            conversation_id,
+            source_text,
+        )
+        return {
+            **base,
+            **activation,
+        }
+
+    if action_type == "register_formal_employees_from_attachment":
+        imported = await _ceo_exec_register_formal_employees_from_attachment(
+            db,
+            conversation_id,
+            source_text,
+        )
+        return {
+            **base,
+            **imported,
+        }
+
     if action_type == "get_finance_status":
         return {
             **base,
@@ -81784,6 +82367,114 @@ def _ceo_exec_override_organizational_structure_plan(
     }
 
 
+def _ceo_exec_override_employee_activation_plan(
+    plan: dict,
+    source_text: str,
+):
+    """Route employee activation to a live-record-only action."""
+
+    folded = str(source_text or "").casefold()
+    employee_word = any(
+        marker in folded
+        for marker in (
+            "الموظفين",
+            "الموظفون",
+            "موظفين",
+            "employees",
+            "employee records",
+            "staff",
+        )
+    )
+    activate_word = any(
+        marker in folded
+        for marker in (
+            "فعل",
+            "فعّل",
+            "فعّلوا",
+            "تفعيل",
+            "نشط",
+            "activate",
+            "enable",
+        )
+    )
+    has_roster_attachment = any(
+        marker in folded
+        for marker in (
+            ".xlsx",
+            ".xls",
+            ".csv",
+            "ملف اكسل",
+            "ملف إكسل",
+            "المرفق",
+            "attached",
+            "attachment",
+            "file:",
+        )
+    )
+
+    roster_action_word = any(
+        marker in folded
+        for marker in (
+            "أضف",
+            "اضف",
+            "ضيف",
+            "سجل",
+            "سجّل",
+            "استورد",
+            "ادخل",
+            "أدخل",
+            "أنشئ",
+            "انشئ",
+            "add",
+            "register",
+            "import",
+            "create",
+        )
+    )
+
+    if not (
+        employee_word
+        and (
+            activate_word
+            or (has_roster_attachment and roster_action_word)
+        )
+    ):
+        return plan
+
+    if has_roster_attachment:
+        return {
+            "handled": True,
+            "title": "Import and activate formal employees from the attached roster",
+            "client_name_exact": None,
+            "blocked_reason": None,
+            "actions": [
+                {
+                    "type": "register_formal_employees_from_attachment",
+                    "agent_slug": "ceo",
+                    "title": "Import formal employee records from the attached roster",
+                    "data": {},
+                }
+            ],
+            "routing": "deterministic_formal_employee_roster_import",
+        }
+
+    return {
+        "handled": True,
+        "title": "Activate existing HR employee records",
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "activate_existing_employees",
+                "agent_slug": "ceo",
+                "title": "Activate only existing formal employee records",
+                "data": {},
+            }
+        ],
+        "routing": "deterministic_existing_employee_activation",
+    }
+
+
 def _ceo_exec_override_workers_template_plan(plan: dict, source_text: str):
     folded = str(source_text or "").casefold()
     template_word = any(
@@ -81964,6 +82655,22 @@ async def _ceo_execution_layer(
         "only as internal registry defaults when the user has not supplied different "
         "codes or cost centers. This action does not create employees, contracts, "
         "payroll, GOSI records, accounting postings or external communication. "
+        "Use activate_existing_employees when the user asks to activate or enable "
+        "employees. This action may change only existing formal HREmployee rows "
+        "with a safe inactive/onboarding status. If the live HR table is empty, "
+        "return blocked and say that no employee records exist. Never create a "
+        "person from a position, an assistant message, a remembered name, or an "
+        "inferred leadership list, and never claim employees were activated from "
+        "department/position records. Payroll, contracts and GOSI remain disabled. "
+        "Use register_formal_employees_from_attachment when the user asks to add, "
+        "register or activate formal employees from an attached XLSX/CSV roster. "
+        "The attachment is the authoritative source for names, identity fields, "
+        "departments and positions. Validate every row and create/reuse real "
+        "HREmployee records, then verify their IDs and active status before claiming "
+        "completion. Do not convert a position into a person, do not use assistant "
+        "prose as a source, and do not create a contract, payroll entry or GOSI "
+        "registration. If a row cannot be mapped, block the import with the exact "
+        "row error instead of partially claiming success. "
         "Use get_finance_status for finance/billing status, "
         "get_accountability for named-person status. When the named person "
         "is Fahad Al-Anzi, treat him as an external commercial contributor "
@@ -82092,6 +82799,13 @@ async def _ceo_execution_layer(
         source_text,
     )
 
+    # Formal employee-roster routing runs last so an attached employee file
+    # cannot be misrouted to the non-employee worker importer.
+    plan = _ceo_exec_override_employee_activation_plan(
+        plan,
+        source_text,
+    )
+
     if not plan.get("handled"):
         result = {
             "handled": False,
@@ -82210,7 +82924,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.3",
+        "version": "1.6.5",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

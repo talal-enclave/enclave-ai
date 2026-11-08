@@ -1,3 +1,50 @@
+# Enclave v1.6.5 — Formal employee roster import
+
+This release fixes the case where a user provides a completed employee roster
+and asks the CEO to add or activate the employees.
+
+- A formal `.xlsx`/`.csv` employee roster attached to the CEO conversation is
+  now imported into the live `HREmployee` table.
+- The importer maps each row to the existing HR department and position, keeps
+  the source identity fields, creates deterministic employee numbers, and sets
+  the requested internal employee status to active.
+- Existing rows are reused by source row, employee number, national ID or work
+  email; retries do not create duplicates.
+- Bilingual Arabic/English number headers are mapped explicitly, so worker ID,
+  national ID, mobile and emergency-contact values cannot overwrite one another.
+- The CEO response includes the real employee IDs and post-write verification.
+  A row mapping error blocks the import instead of producing a partial success
+  claim.
+- The import does not create employment contracts, payroll, GOSI registration,
+  payments or external communications.
+
+Without an attached roster, the existing v1.6.4 behavior remains: only already
+persisted formal employee records can be activated, and an empty live table is
+reported as blocked.
+
+---
+
+# Enclave v1.6.4 — Evidence-first employee activation
+
+This release fixes the false-success response when the CEO is asked to
+activate employees.
+
+- `activate_existing_employees` reads the live HR employee table and can only
+  activate existing formal employee rows with a safe inactive/onboarding status.
+- If no formal employee rows exist, the action returns `blocked` with the live
+  count and cannot create a person from a position, an assistant response, a
+  remembered name or an inferred leadership list.
+- The completion response includes real employee IDs and before/after statuses;
+  the CEO cannot claim activation without record evidence.
+- Non-employee/external-worker rows, terminated rows and other non-eligible
+  statuses are left unchanged.
+- Payroll, contracts, GOSI registration, payments and external communication
+  remain disabled.
+
+The existing v1.6.3 organizational-structure execution remains unchanged.
+
+---
+
 # Enclave v1.6.3 — CEO organizational structure execution
 
 This release fixes the false-success response for internal department and
