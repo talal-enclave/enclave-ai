@@ -2195,37 +2195,43 @@ async def chat_with_agent(
     )
     db.add(user_message)
 
-    try:
-        response = await openai_client.responses.create(
-            model=OPENAI_MODEL,
-            instructions=effective_instructions,
-            input=input_messages,
-            store=False,
-        )
+    response = None
 
-        answer = response.output_text
-
+    # Handled CEO execution already has the authoritative live evidence. Do
+    # not make a second provider call just to restate that evidence: a provider
+    # outage or malformed response must not turn a valid internal read/write
+    # result into a chat 500. Advisory/general CEO questions still use the
+    # model path below.
+    if agent.slug == "ceo" and ceo_execution:
+        answer = _ceo_exec_truth_response(ceo_execution)
         if not answer:
-            raise RuntimeError(
-                "Model returned no text"
+            answer = (
+                "تعذر تكوين نتيجة تنفيذ قابلة للتحقق؛ "
+                "لم تتم كتابة أي بيانات."
+            )
+    else:
+        try:
+            response = await openai_client.responses.create(
+                model=OPENAI_MODEL,
+                instructions=effective_instructions,
+                input=input_messages,
+                store=False,
             )
 
-        # The model may explain an executed action, but it is never the source
-        # of truth for a handled system action.  Use the deterministic evidence
-        # renderer whenever the execution layer produced actions, so a generic
-        # model sentence cannot override a live blocked/read-only result.
-        if agent.slug == "ceo" and ceo_execution:
-            evidence_answer = _ceo_exec_truth_response(ceo_execution)
-            if evidence_answer:
-                answer = evidence_answer
+            answer = response.output_text
 
-    except Exception as exc:
-        await db.rollback()
+            if not answer:
+                raise RuntimeError(
+                    "Model returned no text"
+                )
 
-        raise HTTPException(
-            status_code=502,
-            detail=f"AI provider error: {type(exc).__name__}",
-        )
+        except Exception as exc:
+            await db.rollback()
+
+            raise HTTPException(
+                status_code=502,
+                detail=f"AI provider error: {type(exc).__name__}",
+            )
 
     # Save assistant response
     assistant_message = Message(
@@ -2233,9 +2239,17 @@ async def chat_with_agent(
         role="assistant",
         content=answer,
         message_metadata={
-            "provider": "openai",
-            "model": OPENAI_MODEL,
-            "response_id": response.id,
+            "provider": (
+                "internal_execution"
+                if response is None
+                else "openai"
+            ),
+            "model": OPENAI_MODEL if response is not None else None,
+            "response_id": (
+                getattr(response, "id", None)
+                if response is not None
+                else None
+            ),
         },
     )
     db.add(assistant_message)
@@ -84129,7 +84143,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.12",
+        "version": "1.6.14",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

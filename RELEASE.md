@@ -1,3 +1,35 @@
+# Enclave v1.6.14 — Deterministic CEO execution resume
+
+This release safely completes the v1.6.13 source state after its installer
+stopped during a worktree check. It validates the installed source by SHA-256
+instead of requiring every manifest entry to appear as a Git change; files
+that are already identical to the baseline are accepted as-is.
+
+- Resumes the interrupted CEO evidence-firewall deployment without rerunning
+  v1.6.13.
+- Preserves the pre-resume source, database and attachment backup.
+- Keeps deterministic evidence responses, rollback safety and live HR vacancy
+  verification from v1.6.13.
+- Does not reset data or send anything externally.
+
+---
+
+# Enclave v1.6.13 — Deterministic CEO execution responses
+
+This release removes an unnecessary provider dependency from handled CEO
+execution requests.
+
+- Live HR reads and supported internal writes now return directly from the
+  deterministic execution evidence; they do not call the language model a
+  second time just to restate the result.
+- Provider outages or malformed provider responses therefore cannot turn a
+  verified internal action into a generic chat 500.
+- Advisory/general CEO questions still use the model path.
+- The v1.6.12 installer acceptance repair and interrupted-state recovery remain
+  included.
+
+---
+
 # Enclave v1.6.12 — Installer acceptance repair
 
 This release repairs the v1.6.11 installer acceptance path after the API
