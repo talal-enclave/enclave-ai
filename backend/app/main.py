@@ -83093,22 +83093,7 @@ def _ceo_exec_override_hr_vacancy_plan(
             "open position",
         )
     )
-    create_word = any(
-        marker in folded
-        for marker in (
-            "افتح",
-            "أنشئ",
-            "انشئ",
-            "أضف",
-            "اضف",
-            "سجل",
-            "سجّل",
-            "create",
-            "open",
-            "add",
-            "register",
-        )
-    )
+    create_word = _ceo_exec_has_explicit_mutation_intent(source_text)
 
     if not (vacancy_word and create_word):
         return plan
@@ -83225,15 +83210,13 @@ def _ceo_exec_override_hr_vacancy_plan(
     }
 
 
-def _ceo_exec_is_mutation_request(source_text: str):
-    """Identify direct record-change instructions with no safe fallback.
+def _ceo_exec_has_explicit_mutation_intent(source_text: str):
+    """Detect an imperative record-change command, not a status question."""
 
-    Unsupported mutation requests must be reported as blocked instead of being
-    handed to an advisory specialist whose prose could be mistaken for a write.
-    """
+    import re
 
     folded = str(source_text or "").casefold()
-    mutation_word = any(
+    if any(
         marker in folded
         for marker in (
             "أنشئ",
@@ -83259,14 +83242,37 @@ def _ceo_exec_is_mutation_request(source_text: str):
             "add",
             "register",
             "import",
-            "open",
             "activate",
             "enable",
             "update",
             "save",
             "post",
         )
+    ):
+        return True
+
+    # English "open" is mutation intent only when it is followed by the
+    # vacancy/position object. This excludes status questions such as
+    # "Is the vacancy open?" and "Is it open?".
+    return bool(
+        re.search(
+            r"\bopen\s+(?:the\s+)?(?:[a-z0-9][a-z0-9 _-]*\s+)?"
+            r"(?:vacancy|position|job opening)\b",
+            folded,
+            flags=re.IGNORECASE,
+        )
     )
+
+
+def _ceo_exec_is_mutation_request(source_text: str):
+    """Identify direct record-change instructions with no safe fallback.
+
+    Unsupported mutation requests must be reported as blocked instead of being
+    handed to an advisory specialist whose prose could be mistaken for a write.
+    """
+
+    folded = str(source_text or "").casefold()
+    mutation_word = _ceo_exec_has_explicit_mutation_intent(source_text)
     record_word = any(
         marker in folded
         for marker in (
@@ -83313,6 +83319,13 @@ def _ceo_exec_is_record_lookup_request(source_text: str):
     """Identify record-status questions that require a live read action."""
 
     folded = str(source_text or "").casefold()
+    # Explicit mutation intent takes precedence when a confirmation has
+    # rehydrated an earlier read question into the same source. Without this
+    # guard, a command such as "افتح لي الشاغر" could be rewritten as a
+    # blocked status lookup even after the deterministic vacancy create route
+    # selected a supported live write action.
+    if _ceo_exec_has_explicit_mutation_intent(source_text):
+        return False
     question_form = any(
         marker in folded
         for marker in (
@@ -83637,8 +83650,15 @@ async def _ceo_execution_layer(
     # Rehydrate only user-authored context so assistant prose cannot become
     # invented business evidence.
     if _ceo_exec_is_confirmation(current_user_text) and recent_context:
+        # A confirmation belongs to the immediately preceding user request.
+        # Rehydrating the full six-message context can mix an earlier status
+        # question with a later mutation command (for example, a status read
+        # followed by "افتح لي الشاغر"). That mixed source then trips the
+        # read-only guard and blocks the write. Keep the latest user request
+        # as the command context; the vacancy resolver still consults the
+        # broader user-only context for a single unambiguous title.
         source_text = "\n\n".join(
-            recent_context + [current_user_text]
+            recent_context[-1:] + [current_user_text]
         ) + attachment_context
 
     # A short command such as "افتح لي الشاغر" may refer to the vacancy named
@@ -84082,7 +84102,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.9",
+        "version": "1.6.10",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

@@ -1,3 +1,19 @@
+# Enclave v1.6.10 — Vacancy follow-up execution correction
+
+This release fixes the confirmation path that could combine an older vacancy
+status question with a later “open the vacancy” command and incorrectly route
+the combined text back to a read-only lookup.
+
+- A short confirmation now rehydrates only the immediately preceding
+  user-authored request; the broader user-only context is still used only to
+  resolve one unambiguous vacancy title.
+- Explicit mutation intent takes precedence over the live-read guard, so a
+  supported `create_hr_vacancy` action is not replaced by a blocked lookup.
+- The real HRVacancy write, persisted ID, department/position link and `open`
+  status remain mandatory before completion is reported.
+
+---
+
 # Enclave v1.6.9 — Context-aware truthful execution
 
 This release fixes the over-blocking case where a clear follow-up such as
