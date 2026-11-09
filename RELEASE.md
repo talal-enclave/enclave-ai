@@ -1,3 +1,33 @@
+# Enclave v1.6.12 — Installer acceptance repair
+
+This release repairs the v1.6.11 installer acceptance path after the API
+container correctly passed its checks but the container-local runner attempted
+to read a frontend source file that is not mounted into that image.
+
+- Frontend source checks run on the host staging tree; API-container checks
+  validate only backend and live endpoint requirements.
+- The installer can safely resume the exact uncommitted v1.6.11 source state
+  left by that failed acceptance step, after verifying the expected paths and
+  hashes. Unexpected changes still stop before any write.
+- No database reset, record deletion or external communication is performed.
+
+---
+
+# Enclave v1.6.11 — Chat error handling and execution rollback
+
+This release fixes the failure path shown as `Unexpected token 'I', "Internal
+Server Error" is not valid JSON` in the CEO chat.
+
+- The CEO chat client now parses JSON defensively and reports the real HTTP
+  status/body when a proxy or upstream returns plain text.
+- A failed execution transaction is rolled back before the chat continues, so
+  a stale SQLAlchemy transaction cannot turn the response into an opaque 500.
+- Execution-engine failures are returned as blocked evidence with no write
+  claim; the assistant cannot replace them with a fabricated success message.
+- The vacancy follow-up correction from v1.6.10 remains included.
+
+---
+
 # Enclave v1.6.10 — Vacancy follow-up execution correction
 
 This release fixes the confirmation path that could combine an older vacancy

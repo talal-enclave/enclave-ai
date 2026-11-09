@@ -486,12 +486,34 @@ export default function Home() {
         }
       );
 
-      const data = await res.json();
+      // Proxies and upstream failures can return plain text (for example
+      // "Internal Server Error") even though normal API responses are JSON.
+      // Read once and parse defensively so the user sees the real HTTP error
+      // instead of a misleading JavaScript "Unexpected token" message.
+      const rawResponse = await res.text();
+      let data = {};
+      if (rawResponse.trim()) {
+        try {
+          data = JSON.parse(rawResponse);
+        } catch (parseError) {
+          data = {
+            detail: rawResponse.trim(),
+            response_parse_error: true,
+          };
+        }
+      }
 
       if (!res.ok) {
         throw new Error(
           data.detail
-          || "تعذر تنفيذ الطلب"
+          || `تعذر تنفيذ الطلب (HTTP ${res.status})`
+        );
+      }
+
+      if (!data || typeof data.message !== "string") {
+        throw new Error(
+          data.detail
+          || `استجابة غير صالحة من الخادم (HTTP ${res.status})`
         );
       }
 

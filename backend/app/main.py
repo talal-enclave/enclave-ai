@@ -2157,8 +2157,35 @@ async def chat_with_agent(
                       "Do not claim external execution unless proven."
                 )
 
-        except Exception:
+        except Exception as exc:
+            # A failed execution transaction must be rolled back before the
+            # chat endpoint continues. Otherwise the later assistant-message
+            # commit can surface as a generic plain-text 500 response. Keep
+            # the failure inside the authoritative evidence channel so the
+            # CEO cannot replace it with a fabricated success statement.
+            await db.rollback()
             ceo_orchestration = None
+            ceo_execution = {
+                "handled": True,
+                "title": "خطأ في محرك التنفيذ",
+                "actions": [
+                    {
+                        "type": "ceo_execution_engine_error",
+                        "agent_slug": "ceo",
+                        "title": "تعذر تشغيل محرك التنفيذ",
+                        "status": "blocked",
+                        "reason": (
+                            "تعذر تشغيل محرك التنفيذ؛ لم تتم كتابة أي بيانات."
+                        ),
+                        "diagnostic_code": type(exc).__name__,
+                    }
+                ],
+                "artifact_generation": False,
+                "safety": {},
+                "rules": {
+                    "execution_claim_requires_record_evidence": True,
+                },
+            }
 
     # Save user message
     user_message = Message(
@@ -84102,7 +84129,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.10",
+        "version": "1.6.12",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
