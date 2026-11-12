@@ -1,3 +1,30 @@
+# Enclave v1.6.18 — Evidence-first finance attachment registration
+
+This release fixes CEO registration of an attached services agreement,
+commercial invoice and bank receipt after generic finance routes returned HTTP
+422 without a truthful, actionable explanation.
+
+- Reads the stored CEO conversation attachments directly and validates the
+  source invoice number, dates, client CR, line totals, zero-VAT statement,
+  receipt reference, amount and beneficiary IBAN.
+- Creates or reuses the real finance customer and beneficiary bank account,
+  creates or reuses a draft accounts-receivable invoice, and creates or reuses
+  an unmatched bank statement line using the receipt reference as the
+  idempotency key.
+- Registers the services agreement as a legal draft only. A source marked
+  `DRAFT FOR REVIEW` or missing an Enclave signature is never treated as
+  executed.
+- Blocks atomically on missing/conflicting fields or chart accounts and
+  reports the exact reason. Retries reuse existing records and do not duplicate
+  customers, invoices, bank accounts, statements or contracts.
+- The receipt remains unmatched until the existing approval, posting and bank
+  reconciliation workflows are completed. No AP bill is created for an
+  Enclave-issued customer invoice.
+- No accounting posting, collection, bank transfer, signature, external
+  communication or external send is performed.
+
+---
+
 # Enclave v1.6.17 — Truthful bank-balance reads
 
 This release fixes CEO finance lookups that were incorrectly answered from the

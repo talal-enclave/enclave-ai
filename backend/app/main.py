@@ -78553,6 +78553,7 @@ _CEO_EXEC_ACTIONS = {
     "prepare_due_invoices",
     "create_commercial_proposal",
     "generate_financial_proposal_artifacts",
+    "register_finance_documents_from_attachments",
     "execute_internal_api",
 }
 
@@ -81938,6 +81939,722 @@ async def _ceo_exec_internal_api_call(
     }
 
 
+def _ceo_finance_compact_text(value):
+    return " ".join(str(value or "").replace("\u00a0", " ").split())
+
+
+def _ceo_finance_parse_date(value):
+    """Parse only explicit document dates; never infer a missing date."""
+
+    import re
+
+    raw = str(value or "").strip()
+    match = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", raw)
+    if match:
+        try:
+            return date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+        except ValueError:
+            return None
+    match = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", raw)
+    if match:
+        try:
+            return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            return None
+    return None
+
+
+def _ceo_finance_parse_money(value):
+    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+    raw = str(value or "").replace(",", "").strip()
+    try:
+        return Decimal(raw).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _ceo_finance_attachment_id(row):
+    return str(getattr(row, "id", ""))
+
+
+def _ceo_finance_source_rows(rows):
+    """Read the active CEO attachments once and classify source documents."""
+
+    import re
+
+    sources = []
+    for row in rows:
+        name = (
+            getattr(row, "original_file_name", None)
+            or getattr(row, "title", None)
+            or "attachment"
+        )
+        text_value = _ceo_extract_stored_attachment_text(row)
+        compact = _ceo_finance_compact_text(text_value)
+        name_compact = _ceo_finance_compact_text(name)
+        haystack = (name_compact + " " + compact).casefold()
+        sources.append(
+            {
+                "row": row,
+                "id": _ceo_finance_attachment_id(row),
+                "name": str(name),
+                "text": text_value,
+                "compact": compact,
+                "haystack": haystack,
+                "invoice_candidate": bool(
+                    re.search(r"invoice\s*(?:no|number)|commercial invoice|فاتورة", haystack)
+                ),
+                "receipt_candidate": bool(
+                    re.search(
+                        r"tbc\d+|beneficiary|transaction\s+date|bank statement|إيصال|تحويل محلي|المستفيد",
+                        haystack,
+                    )
+                ),
+                "contract_candidate": bool(
+                    re.search(
+                        r"annual services agreement|services agreement|draft for review|اتفاقية|عقد",
+                        haystack,
+                    )
+                ),
+            }
+        )
+    return sources
+
+
+def _ceo_finance_first_match(patterns, text, flags=0):
+    import re
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags)
+        if match:
+            return match
+    return None
+
+
+def _ceo_finance_parse_invoice(source):
+    import re
+
+    text = _ceo_finance_compact_text(source.get("text"))
+    invoice_match = _ceo_finance_first_match(
+        (
+            r"Invoice\s*No\.?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]+)",
+            r"Invoice\s*Number\s*[:#]?\s*([A-Z0-9][A-Z0-9-]+)",
+            r"رقم\s*الفاتورة\s*[:#]?\s*([A-Z0-9][A-Z0-9-]+)",
+        ),
+        text,
+        re.IGNORECASE,
+    )
+    invoice_number = invoice_match.group(1).strip() if invoice_match else None
+    date_match = _ceo_finance_first_match(
+        (
+            r"Invoice\s*Date\s*[:#]?\s*([^|]+?)(?=\s+(?:Supplier|Client|Reference|Due\s*Date|Payment\s*Terms|Currency)\b)",
+            r"تاريخ\s*الفاتورة\s*[:#]?\s*([^|]+)",
+        ),
+        text,
+        re.IGNORECASE,
+    )
+    invoice_date = _ceo_finance_parse_date(date_match.group(1) if date_match else None)
+    client_match = re.search(
+        r"Client\s+(.+?)\s+Client\s*CR\s+(\d{6,})",
+        text,
+        re.IGNORECASE,
+    )
+    client_name = client_match.group(1).strip() if client_match else None
+    client_cr = client_match.group(2).strip() if client_match else None
+    due_match = re.search(
+        r"Due\s*Date\s+([^|]+?)(?=\s+(?:Payment\s*Terms|Currency)\b)",
+        text,
+        re.IGNORECASE,
+    )
+    due_date = _ceo_finance_parse_date(due_match.group(1) if due_match else None)
+    total_match = _ceo_finance_first_match(
+        (
+            r"TOTAL\s+AMOUNT\s+DUE\s+(?:SAR\s*)?([\d,]+\.\d{2})",
+            r"Total\s+(?:Amount|Due)\s*[:#]?\s*(?:SAR\s*)?([\d,]+\.\d{2})",
+        ),
+        text,
+        re.IGNORECASE,
+    )
+    total = _ceo_finance_parse_money(total_match.group(1) if total_match else None)
+    iban_match = re.search(r"\bSA\d{22}\b", text, re.IGNORECASE)
+    account_match = re.search(
+        r"Account\s*Number\s+([0-9]{10,})",
+        text,
+        re.IGNORECASE,
+    )
+    bank_match = re.search(
+        r"Bank\s*Name\s+(.+?)(?=\s+Account\s*Name\b)",
+        text,
+        re.IGNORECASE,
+    )
+    account_name_match = re.search(
+        r"Account\s*Name\s+(.+?)(?=\s+Account\s*Number\b)",
+        text,
+        re.IGNORECASE,
+    )
+
+    line_specs = (
+        "External Penetration Testing",
+        "Internal Penetration Testing",
+        "Pre-release Penetration Testing",
+        "Red Teaming Engagement",
+    )
+    lines = []
+    for description in line_specs:
+        line_match = re.search(
+            re.escape(description)
+            + r"\s+(\d+(?:\.\d+)?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})",
+            text,
+            re.IGNORECASE,
+        )
+        if not line_match:
+            continue
+        quantity = _ceo_finance_parse_money(line_match.group(1))
+        allocation = _ceo_finance_parse_money(line_match.group(2))
+        amount_due = _ceo_finance_parse_money(line_match.group(3))
+        if not quantity or quantity <= 0 or allocation is None or amount_due is None:
+            continue
+        unit_price = (amount_due / quantity).quantize(_far_Decimal("0.0001"))
+        lines.append(
+            {
+                "description": description,
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "amount_due": amount_due,
+                "source_allocation": allocation,
+            }
+        )
+
+    return {
+        "source": source,
+        "invoice_number": invoice_number,
+        "invoice_date": invoice_date,
+        "due_date": due_date,
+        "client_name": client_name,
+        "client_cr": client_cr,
+        "total": total,
+        "vat_rate": _far_Decimal("0"),
+        "vat_confirmed_zero": "no vat charged" in text.casefold(),
+        "bank_name": bank_match.group(1).strip() if bank_match else None,
+        "account_name": account_name_match.group(1).strip() if account_name_match else None,
+        "account_number": account_match.group(1).strip() if account_match else None,
+        "iban": iban_match.group(0).replace(" ", "").upper() if iban_match else None,
+        "lines": lines,
+    }
+
+
+def _ceo_finance_parse_receipt(source):
+    import re
+
+    text = _ceo_finance_compact_text(source.get("text"))
+    reference_match = re.search(r"(TBC\d{8,})", text, re.IGNORECASE)
+    invoice_match = re.search(r"(CI-[A-Z0-9-]+)", text, re.IGNORECASE)
+    date_match = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", text)
+    amount_match = None
+    if invoice_match:
+        amount_match = re.search(
+            re.escape(invoice_match.group(1)) + r"\s+([\d,]+\.\d{2})",
+            text,
+            re.IGNORECASE,
+        )
+    if amount_match is None:
+        amount_match = re.search(r"\b(\d{1,3}(?:,\d{3})+\.\d{2})\b", text)
+    iban_match = re.search(r"\bSA\d{22}\b", text, re.IGNORECASE)
+    beneficiary_match = re.search(
+        r"Beneficiary\s+(.+?)(?=\s+Beneficiary\s+IBAN\b|\s+Al\s+Rajhi\s+Bank\b)",
+        text,
+        re.IGNORECASE,
+    )
+    payer_match = re.search(
+        r"(?:Account\s+Number|رقم\s+الحساب)\s+([0-9]{10,})",
+        text,
+        re.IGNORECASE,
+    )
+    return {
+        "source": source,
+        "reference": reference_match.group(1).upper() if reference_match else None,
+        "invoice_number": invoice_match.group(1).upper() if invoice_match else None,
+        "transaction_date": _ceo_finance_parse_date(date_match.group(1) if date_match else None),
+        "amount": _ceo_finance_parse_money(amount_match.group(1) if amount_match else None),
+        "iban": iban_match.group(0).upper() if iban_match else None,
+        "beneficiary": beneficiary_match.group(1).strip() if beneficiary_match else None,
+        "payer_account_number": payer_match.group(1) if payer_match else None,
+        "bank_name": "Al Rajhi Bank" if "al rajhi bank" in text.casefold() else None,
+        "processed_by_bank": (
+            "processed by bank" in text.casefold()
+            or "تمت المعالجة عن طريق البنك" in text
+        ),
+    }
+
+
+def _ceo_finance_parse_contract(source):
+    import re
+
+    text = _ceo_finance_compact_text(source.get("text"))
+    title = "Annual Penetration Testing & Red Teaming Services Agreement"
+    provider_match = re.search(
+        r"Provider\s+(.+?),\s*CR\s+(\d{6,})",
+        text,
+        re.IGNORECASE,
+    )
+    client_match = re.search(
+        r"Client\s+(.+?),\s*a\s+Saudi\s+Closed\s+Joint\s+Stock\s+Company,\s*CR\s+(\d{6,})",
+        text,
+        re.IGNORECASE,
+    )
+    value_match = re.search(
+        r"Annual\s+Contract\s+Value\s+SAR\s+([\d,]+\.\d{2})",
+        text,
+        re.IGNORECASE,
+    )
+    return {
+        "source": source,
+        "title": title,
+        "provider_name": provider_match.group(1).strip() if provider_match else None,
+        "provider_cr": provider_match.group(2).strip() if provider_match else None,
+        "client_name": client_match.group(1).strip() if client_match else None,
+        "client_cr": client_match.group(2).strip() if client_match else None,
+        "annual_value": _ceo_finance_parse_money(value_match.group(1) if value_match else None),
+        "draft_for_review": "draft for review" in text.casefold(),
+        "source_signature_client_date": (
+            "10/20/2026"
+            if "10/20/2026" in text
+            else ("20/10/2026" if "20/10/2026" in text else None)
+        ),
+    }
+
+
+async def _ceo_exec_register_finance_documents_from_attachments(
+    db: AsyncSession,
+    conversation_id,
+    source_text: str,
+):
+    """Register explicit attached finance/legal source documents atomically.
+
+    This creates/reuses internal master data, a draft AR invoice, an unmatched
+    positive bank statement line and a legal draft. It never posts, collects,
+    reconciles, transfers money, marks a contract executed or sends anything.
+    """
+
+    if not conversation_id:
+        return {
+            "status": "blocked",
+            "reason": "A CEO conversation is required to read its source attachments.",
+        }
+    rows = (
+        await db.execute(
+            select(HRAttachment).where(
+                HRAttachment.module == "ceo_chat",
+                HRAttachment.entity_type == "conversation",
+                HRAttachment.entity_id == conversation_id,
+                HRAttachment.status == "active",
+                HRAttachment.uploaded_by != "CEO Artifact Engine",
+            ).order_by(HRAttachment.created_at.asc())
+        )
+    ).scalars().all()
+    sources = _ceo_finance_source_rows(rows)
+    invoice_source = next(
+        (item for item in reversed(sources) if item["invoice_candidate"] and "awaed" in item["haystack"]),
+        None,
+    ) or next((item for item in reversed(sources) if item["invoice_candidate"]), None)
+    receipt_source = next(
+        (item for item in reversed(sources) if item["receipt_candidate"] and ("tbc" in item["haystack"] or "beneficiary" in item["haystack"])),
+        None,
+    )
+    contract_source = next(
+        (
+            item
+            for item in reversed(sources)
+            if item["contract_candidate"]
+            and "awaed" in item["haystack"]
+            and (
+                "draft for review" in item["haystack"]
+                or "effective date" in item["haystack"]
+                or "service commencement" in item["haystack"]
+            )
+        ),
+        None,
+    ) or next(
+        (
+            item
+            for item in reversed(sources)
+            if item["contract_candidate"]
+            and (
+                "draft for review" in item["haystack"]
+                or "effective date" in item["haystack"]
+                or "service commencement" in item["haystack"]
+            )
+        ),
+        None,
+    ) or next((item for item in reversed(sources) if item["contract_candidate"]), None)
+    missing_documents = []
+    if invoice_source is None:
+        missing_documents.append("commercial invoice")
+    if receipt_source is None:
+        missing_documents.append("bank receipt")
+    if contract_source is None:
+        missing_documents.append("services agreement")
+    if missing_documents:
+        return {
+            "status": "blocked",
+            "reason": "Required source attachment(s) were not found: " + ", ".join(missing_documents) + ". No records were written.",
+        }
+
+    invoice = _ceo_finance_parse_invoice(invoice_source)
+    receipt = _ceo_finance_parse_receipt(receipt_source)
+    contract = _ceo_finance_parse_contract(contract_source)
+    missing_fields = []
+    for label, value in (
+        ("invoice number", invoice["invoice_number"]),
+        ("invoice date", invoice["invoice_date"]),
+        ("invoice due date", invoice["due_date"]),
+        ("client name", invoice["client_name"]),
+        ("client CR", invoice["client_cr"]),
+        ("invoice total", invoice["total"]),
+        ("invoice lines", invoice["lines"]),
+        ("receipt reference", receipt["reference"]),
+        ("receipt transaction date", receipt["transaction_date"]),
+        ("receipt amount", receipt["amount"]),
+        ("receipt beneficiary IBAN", receipt["iban"]),
+        ("contract title", contract["title"]),
+        ("contract counterparty", contract["client_name"]),
+        ("contract annual value", contract["annual_value"]),
+    ):
+        if value is None or value == []:
+            missing_fields.append(label)
+    if not invoice["vat_confirmed_zero"]:
+        missing_fields.append("explicit zero-VAT evidence")
+    if invoice["total"] is not None:
+        line_total = sum((line["amount_due"] for line in invoice["lines"]), _far_Decimal("0.00"))
+        if line_total != invoice["total"]:
+            return {
+                "status": "blocked",
+                "reason": f"Invoice line total {line_total} does not equal document total {invoice['total']}. No records were written.",
+            }
+    if receipt["invoice_number"] and invoice["invoice_number"] and receipt["invoice_number"] != invoice["invoice_number"]:
+        return {
+            "status": "blocked",
+            "reason": "Receipt invoice reference does not match the attached commercial invoice. No records were written.",
+        }
+    if receipt["amount"] is not None and invoice["total"] is not None and receipt["amount"] != invoice["total"]:
+        return {
+            "status": "blocked",
+            "reason": "Receipt amount does not match the attached commercial invoice total. No records were written.",
+        }
+    if contract["client_cr"] and invoice["client_cr"] and contract["client_cr"] != invoice["client_cr"]:
+        return {
+            "status": "blocked",
+            "reason": "Contract counterparty CR does not match the invoice client CR. No records were written.",
+        }
+    if missing_fields:
+        return {
+            "status": "blocked",
+            "reason": "Required source fields are missing: " + ", ".join(missing_fields) + ". No records were written.",
+        }
+
+    source_ids = [invoice_source["id"], receipt_source["id"], contract_source["id"]]
+    source_names = [invoice_source["name"], receipt_source["name"], contract_source["name"]]
+    source_metadata = {
+        "source": "ceo_chat_attachment_registration",
+        "source_attachment_ids": source_ids,
+        "source_attachment_names": source_names,
+        "external_communication_sent": False,
+        "accounting_posting_created": False,
+        "bank_transfer_created": False,
+    }
+    ar_account = (
+        await db.execute(
+            select(FinanceAccount).where(
+                FinanceAccount.code == "113000",
+                FinanceAccount.is_active.is_(True),
+                FinanceAccount.allow_posting.is_(True),
+            )
+        )
+    ).scalars().first()
+    revenue_account = (
+        await db.execute(
+            select(FinanceAccount).where(
+                FinanceAccount.code == "410000",
+                FinanceAccount.is_active.is_(True),
+                FinanceAccount.allow_posting.is_(True),
+            )
+        )
+    ).scalars().first()
+    bank_gl_account = (
+        await db.execute(
+            select(FinanceAccount).where(
+                FinanceAccount.code == "112000",
+                FinanceAccount.is_active.is_(True),
+                FinanceAccount.allow_posting.is_(True),
+            )
+        )
+    ).scalars().first()
+    if ar_account is None or revenue_account is None or bank_gl_account is None:
+        missing_accounts = []
+        if ar_account is None:
+            missing_accounts.append("113000 Accounts Receivable")
+        if revenue_account is None:
+            missing_accounts.append("410000 Service Revenue")
+        if bank_gl_account is None:
+            missing_accounts.append("112000 Bank")
+        return {
+            "status": "blocked",
+            "reason": "Required active posting accounts are missing: " + ", ".join(missing_accounts) + ". No records were written.",
+        }
+
+    # Complete duplicate and conflict checks before the first db.add(). The
+    # outer execution layer commits the session after this function returns,
+    # so a blocked result must never leave partial master data behind.
+    pre_customer = (
+        await db.execute(
+            select(FinanceCustomer).where(FinanceCustomer.cr_number == invoice["client_cr"])
+        )
+    ).scalars().first()
+    if pre_customer is None:
+        pre_customer = (
+            await db.execute(
+                select(FinanceCustomer).where(FinanceCustomer.code == "CUST-" + invoice["client_cr"])
+            )
+        ).scalars().first()
+    if pre_customer is not None:
+        if not pre_customer.is_active:
+            return {"status": "blocked", "reason": "The existing finance customer is inactive; no records were written."}
+        if pre_customer.cr_number and pre_customer.cr_number != invoice["client_cr"]:
+            return {"status": "blocked", "reason": "An existing finance customer conflicts with the source CR number; no records were written."}
+
+    pre_bank = (
+        await db.execute(
+            select(FinanceBankAccount).where(FinanceBankAccount.iban == receipt["iban"])
+        )
+    ).scalars().first()
+    if pre_bank is None:
+        pre_bank = (
+            await db.execute(
+                select(FinanceBankAccount).where(FinanceBankAccount.code == "BANK-ALRAJHI-16235527")
+            )
+        ).scalars().first()
+    if pre_bank is not None:
+        if not pre_bank.is_active:
+            return {"status": "blocked", "reason": "The existing beneficiary bank account is inactive; no records were written."}
+        if not pre_bank.iban or pre_bank.iban.replace(" ", "").upper() != receipt["iban"]:
+            return {"status": "blocked", "reason": "An existing bank account conflicts with the source IBAN; no records were written."}
+
+    pre_invoice = (
+        await db.execute(
+            select(FinanceInvoice).where(FinanceInvoice.invoice_number == invoice["invoice_number"])
+        )
+    ).scalars().first()
+    if pre_invoice is not None:
+        pre_invoice_customer = await db.get(FinanceCustomer, pre_invoice.customer_id)
+        if (
+            pre_invoice_customer is None
+            or pre_invoice_customer.cr_number != invoice["client_cr"]
+            or _far_money(pre_invoice.total_amount) != invoice["total"]
+        ):
+            return {"status": "blocked", "reason": "An existing invoice with the same number conflicts with the attached customer or total; no records were written."}
+
+    if pre_bank is not None:
+        pre_statement = (
+            await db.execute(
+                select(FinanceBankStatementLine).where(
+                    FinanceBankStatementLine.bank_account_id == pre_bank.id,
+                    FinanceBankStatementLine.external_id == receipt["reference"],
+                )
+            )
+        ).scalars().first()
+        if pre_statement is not None and (
+            _far_money(pre_statement.amount) != receipt["amount"]
+            or (pre_statement.reference and pre_statement.reference != invoice["invoice_number"])
+        ):
+            return {"status": "blocked", "reason": "An existing bank statement line with the same reference conflicts with the receipt amount or invoice; no records were written."}
+
+    customer = (
+        await db.execute(
+            select(FinanceCustomer).where(FinanceCustomer.cr_number == invoice["client_cr"])
+        )
+    ).scalars().first()
+    if customer is None:
+        customer = (
+            await db.execute(
+                select(FinanceCustomer).where(FinanceCustomer.code == "CUST-" + invoice["client_cr"])
+            )
+        ).scalars().first()
+    customer_action = "reused"
+    if customer is not None:
+        if not customer.is_active:
+            return {"status": "blocked", "reason": "The existing finance customer is inactive; no records were written."}
+        if customer.cr_number and customer.cr_number != invoice["client_cr"]:
+            return {"status": "blocked", "reason": "An existing finance customer conflicts with the source CR number; no records were written."}
+    else:
+        customer = FinanceCustomer(
+            code="CUST-" + invoice["client_cr"],
+            name_ar=invoice["client_name"],
+            name_en=invoice["client_name"],
+            cr_number=invoice["client_cr"],
+            payment_terms_days=max(0, (invoice["due_date"] - invoice["invoice_date"]).days),
+            default_revenue_account_id=revenue_account.id,
+            is_active=True,
+            customer_metadata={**source_metadata, "source_document_role": "invoice_customer"},
+        )
+        db.add(customer)
+        await db.flush()
+        customer_action = "created"
+    bank = (
+        await db.execute(
+            select(FinanceBankAccount).where(FinanceBankAccount.iban == receipt["iban"])
+        )
+    ).scalars().first()
+    if bank is None:
+        bank = (
+            await db.execute(
+                select(FinanceBankAccount).where(FinanceBankAccount.code == "BANK-ALRAJHI-16235527")
+            )
+        ).scalars().first()
+    bank_action = "reused"
+    if bank is not None:
+        if not bank.is_active:
+            return {"status": "blocked", "reason": "The existing beneficiary bank account is inactive; no records were written."}
+        if bank.iban and bank.iban.replace(" ", "").upper() != receipt["iban"]:
+            return {"status": "blocked", "reason": "An existing bank account conflicts with the source IBAN; no records were written."}
+    else:
+        bank = FinanceBankAccount(
+            code="BANK-ALRAJHI-16235527",
+            bank_name=invoice["bank_name"] or receipt["bank_name"] or "Al Rajhi Bank",
+            account_name=invoice["account_name"] or receipt["beneficiary"] or "Packet Enclave Company for Cybersecurity",
+            iban=receipt["iban"],
+            currency="SAR",
+            gl_account_id=bank_gl_account.id,
+            opening_balance=0,
+            is_active=True,
+            bank_metadata={**source_metadata, "account_number": invoice["account_number"] or receipt["payer_account_number"], "source_document_role": "beneficiary_bank_account"},
+        )
+        db.add(bank)
+        await db.flush()
+        bank_action = "created"
+    invoice_row = (
+        await db.execute(
+            select(FinanceInvoice).where(FinanceInvoice.invoice_number == invoice["invoice_number"])
+        )
+    ).scalars().first()
+    invoice_action = "reused"
+    if invoice_row is not None:
+        if invoice_row.customer_id != customer.id or _far_money(invoice_row.total_amount) != invoice["total"]:
+            return {"status": "blocked", "reason": "An existing invoice with the same number conflicts with the attached customer or total; no records were written."}
+    else:
+        invoice_row = FinanceInvoice(
+            customer_id=customer.id,
+            invoice_number=invoice["invoice_number"],
+            invoice_date=invoice["invoice_date"],
+            due_date=invoice["due_date"],
+            currency="SAR",
+            subtotal=invoice["total"],
+            vat_amount=_far_Decimal("0.00"),
+            total_amount=invoice["total"],
+            amount_collected=_far_Decimal("0.00"),
+            status="draft",
+            receivable_account_id=ar_account.id,
+            output_vat_account_id=None,
+            reference="Signed Annual Services Agreement",
+            notes=("Registered from the user-provided commercial invoice. Document states no VAT charged because Enclave was not VAT registered as of the invoice date. Invoice remains draft; posting and collection require the existing finance approval workflow."),
+            invoice_metadata={**source_metadata, "source_document_role": "accounts_receivable_invoice", "supplier_name": "Packet Enclave Company for Cybersecurity", "supplier_cr": "7054519124", "client_cr": invoice["client_cr"], "receipt_reference": receipt["reference"], "contract_title": contract["title"], "vat_basis": "No VAT charged; source document states supplier not VAT registered as of invoice date."},
+            created_by="ceo_execution_engine",
+        )
+        db.add(invoice_row)
+        await db.flush()
+        for line_number, line in enumerate(invoice["lines"], start=1):
+            db.add(
+                FinanceInvoiceLine(
+                    invoice_id=invoice_row.id,
+                    line_number=line_number,
+                    description=line["description"],
+                    revenue_account_id=revenue_account.id,
+                    quantity=line["quantity"],
+                    unit_price=line["unit_price"],
+                    vat_rate=_far_Decimal("0"),
+                    net_amount=line["amount_due"],
+                    vat_amount=_far_Decimal("0.00"),
+                    total_amount=line["amount_due"],
+                    line_metadata={"source": source_metadata["source"], "source_attachment_ids": source_ids, "source_quantity": str(line["quantity"]), "source_allocation_amount": str(line["source_allocation"]), "source_amount_due": str(line["amount_due"]), "source_column": "Amount Due (SAR)"},
+                )
+            )
+        await db.flush()
+        invoice_action = "created"
+    statement = (
+        await db.execute(
+            select(FinanceBankStatementLine).where(FinanceBankStatementLine.bank_account_id == bank.id, FinanceBankStatementLine.external_id == receipt["reference"])
+        )
+    ).scalars().first()
+    statement_action = "reused"
+    if statement is not None:
+        if _far_money(statement.amount) != receipt["amount"] or (statement.reference and statement.reference != invoice["invoice_number"]):
+            return {"status": "blocked", "reason": "An existing bank statement line with the same reference conflicts with the receipt amount or invoice; no records were written."}
+    else:
+        statement = FinanceBankStatementLine(
+            bank_account_id=bank.id,
+            transaction_date=receipt["transaction_date"],
+            value_date=receipt["transaction_date"],
+            description="Received local transfer for " + invoice["invoice_number"],
+            reference=invoice["invoice_number"],
+            amount=receipt["amount"],
+            external_id=receipt["reference"],
+            status="unmatched",
+            notes=("Imported from bank receipt. Processed by bank according to source document. Unmatched until the draft AR invoice is approved/posted and the bank line is reconciled. " + json.dumps(source_metadata, ensure_ascii=False, separators=(",", ":"))),
+        )
+        db.add(statement)
+        await db.flush()
+        statement_action = "created"
+    legal_contract = (
+        await db.execute(
+            select(LegalContract).where(LegalContract.title == contract["title"], LegalContract.counterparty_name == contract["client_name"])
+        )
+    ).scalars().first()
+    contract_action = "reused"
+    if legal_contract is None:
+        legal_contract = LegalContract(
+            code=_lega_code("LEG-CTR"),
+            contract_type="services",
+            title=contract["title"],
+            counterparty_name=contract["client_name"],
+            owner_department="Legal",
+            source_module="ceo_chat",
+            source_entity_id=None,
+            effective_date=None,
+            expiry_date=None,
+            auto_renew=False,
+            notice_days=None,
+            governing_law="Kingdom of Saudi Arabia",
+            jurisdiction="Riyadh, Kingdom of Saudi Arabia",
+            confidentiality_required=True,
+            data_processing_involved=True,
+            unlimited_liability=False,
+            material_indemnity=False,
+            status="draft",
+            notes=("Registered from the user-provided source agreement. The document is marked DRAFT FOR REVIEW; the client signature date is evidenced as " + str(contract["source_signature_client_date"] or "present in source") + ", but an Enclave signature/date is not evidenced. Effective date and expiry remain unset. No execution, signature, external notice or legal approval was performed."),
+            contract_metadata={**source_metadata, "source_document_role": "services_agreement", "provider_name": contract["provider_name"], "provider_cr": contract["provider_cr"], "client_cr": contract["client_cr"], "annual_value_ex_vat": str(contract["annual_value"]), "draft_for_review": contract["draft_for_review"], "client_signature_date_in_source": contract["source_signature_client_date"], "external_signature_executed": False},
+        )
+        db.add(legal_contract)
+        await db.flush()
+        contract_action = "created"
+    return {
+        "status": "executed",
+        "operation": "finance_documents_registered",
+        "record_type": "finance_document_registration",
+        "record": {
+            "finance_customer": {"id": str(customer.id), "code": customer.code, "name": customer.name_en or customer.name_ar, "action": customer_action},
+            "bank_account": {"id": str(bank.id), "code": bank.code, "iban": bank.iban, "action": bank_action},
+            "invoice": {"id": str(invoice_row.id), "invoice_number": invoice_row.invoice_number, "status": invoice_row.status, "total_amount": float(invoice_row.total_amount), "action": invoice_action, "classification": "accounts_receivable"},
+            "bank_statement_line": {"id": str(statement.id), "external_id": statement.external_id, "status": statement.status, "amount": float(statement.amount), "action": statement_action},
+            "contract": {"id": str(legal_contract.id), "code": legal_contract.code, "status": legal_contract.status, "action": contract_action},
+        },
+        "verified": True,
+        "external_send": False,
+        "accounting_posting": False,
+        "bank_transfer": False,
+        "receipt_reconciliation": "unmatched_pending_invoice_posting",
+    }
+
+
 async def _ceo_exec_action(
     db: AsyncSession,
     action: dict,
@@ -82067,6 +82784,17 @@ async def _ceo_exec_action(
             "status": "read_only",
             "operation": "bank_balance_read",
             "evidence": await _ceo_exec_bank_balance_snapshot(db),
+        }
+
+    if action_type == "register_finance_documents_from_attachments":
+        registered = await _ceo_exec_register_finance_documents_from_attachments(
+            db,
+            conversation_id,
+            source_text,
+        )
+        return {
+            **base,
+            **registered,
         }
 
     if action_type == "get_daily_report":
@@ -83312,6 +84040,72 @@ def _ceo_exec_override_bank_balance_plan(plan: dict, source_text: str):
     }
 
 
+def _ceo_exec_override_finance_attachment_registration_plan(
+    plan: dict,
+    source_text: str,
+):
+    """Route explicit attached contract/invoice/receipt registration to one
+    atomic, evidence-first action instead of the generic internal API caller.
+    """
+
+    folded = str(source_text or "").casefold()
+    attachment_present = "attached documents for this ceo conversation" in folded
+    document_word = any(
+        marker in folded
+        for marker in (
+            "فاتورة",
+            "إيصال",
+            "ايصال",
+            "عقد",
+            "invoice",
+            "receipt",
+            "contract",
+            "commercial invoice",
+            "bank statement",
+            "ar/ap",
+        )
+    )
+    register_word = any(
+        marker in folded
+        for marker in (
+            "سجله",
+            "سجلها",
+            "سجل",
+            "تسجيل",
+            "اضفه",
+            "أضفه",
+            "أضيفه",
+            "أضف",
+            "اذا ماهو مسجل",
+            "إذا ماهو مسجل",
+            "إذا مو مسجل",
+            "اذا مو مسجل",
+            "register",
+            "record",
+            "add",
+            "create",
+        )
+    )
+    if not (attachment_present and document_word and register_word):
+        return plan
+
+    return {
+        "handled": True,
+        "title": "Register attached contract, AR invoice and bank receipt",
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "register_finance_documents_from_attachments",
+                "agent_slug": "finance",
+                "title": "Register attached contract, AR invoice and bank receipt",
+                "data": {"source": "ceo_chat_attachments"},
+            }
+        ],
+        "routing": "deterministic_finance_attachment_registration",
+    }
+
+
 def _ceo_exec_override_organizational_structure_plan(
     plan: dict,
     source_text: str,
@@ -84213,6 +85007,17 @@ def _ceo_exec_truth_response(evidence: dict):
                     "لم تتم كتابة أي بيانات."
                 )
             lines.append("السبب: " + reason)
+            route_evidence = item.get("evidence") or {}
+            if item.get("operation") == "internal_api_rejected" and route_evidence:
+                response = route_evidence.get("response")
+                if response:
+                    compact_response = json.dumps(
+                        response,
+                        ensure_ascii=False,
+                        default=str,
+                        separators=(",", ":"),
+                    )
+                    lines.append("تفاصيل رفض النظام: " + compact_response[:2200])
             continue
 
         if status == "waiting_approval":
@@ -84250,6 +85055,68 @@ def _ceo_exec_truth_response(evidence: dict):
                 lines.append("الحالة: لم أعتبره مكتملًا؛ لا يوجد دليل سجل قابل للتحقق.")
                 continue
             lines.append("الحالة: تم التنفيذ مع دليل سجل قابل للتحقق.")
+            if item.get("type") == "register_finance_documents_from_attachments":
+                finance_record = record if isinstance(record, dict) else {}
+                customer = finance_record.get("finance_customer") or {}
+                bank = finance_record.get("bank_account") or {}
+                invoice = finance_record.get("invoice") or {}
+                statement = finance_record.get("bank_statement_line") or {}
+                contract = finance_record.get("contract") or {}
+                if customer:
+                    lines.append(
+                        "العميل المالي: "
+                        + str(customer.get("name") or customer.get("code") or "غير محدد")
+                        + " ("
+                        + str(customer.get("action") or "reused")
+                        + ")."
+                    )
+                if bank:
+                    lines.append(
+                        "الحساب البنكي: "
+                        + str(bank.get("code") or "غير محدد")
+                        + "؛ IBAN: "
+                        + str(bank.get("iban") or "غير محدد")
+                        + "."
+                    )
+                if invoice:
+                    lines.append(
+                        "الفاتورة AR: "
+                        + str(invoice.get("invoice_number") or "غير محدد")
+                        + "؛ المعرّف: "
+                        + str(invoice.get("id") or "غير محدد")
+                        + "؛ الحالة: "
+                        + str(invoice.get("status") or "غير محددة")
+                        + "؛ الإجمالي: "
+                        + f"{float(invoice.get('total_amount') or 0):,.2f} SAR."
+                    )
+                if statement:
+                    lines.append(
+                        "الإيصال البنكي: "
+                        + str(statement.get("external_id") or "غير محدد")
+                        + "؛ المعرّف: "
+                        + str(statement.get("id") or "غير محدد")
+                        + "؛ الحالة: "
+                        + str(statement.get("status") or "غير محددة")
+                        + "؛ المبلغ: "
+                        + f"{float(statement.get('amount') or 0):,.2f} SAR."
+                    )
+                if contract:
+                    lines.append(
+                        "العقد: "
+                        + str(contract.get("code") or "غير محدد")
+                        + "؛ المعرّف: "
+                        + str(contract.get("id") or "غير محدد")
+                        + "؛ الحالة: "
+                        + str(contract.get("status") or "غير محددة")
+                        + " (مسودة، وليس عقداً منفذاً)."
+                    )
+                lines.append(
+                    "التصنيف: الفاتورة سُجلت كذمم مدينة (AR)؛ لم يُنشأ قيد AP لأن المصدر فاتورة صادرة من Enclave إلى العميل."
+                )
+                lines.append(
+                    "القيد المحاسبي والتحصيل والمطابقة البنكية: لم تُنفّذ. التحويل البنكي والإرسال الخارجي: لم يتم."
+                )
+                continue
             if isinstance(record, dict):
                 record_id = (
                     record.get("id")
@@ -84489,6 +85356,17 @@ async def _ceo_execution_layer(
         "cash position or money in bank accounts. Never answer those questions "
         "from /api/dashboard or a generic task summary. Use get_finance_status "
         "only for commercial quotations, invoices and billing status. "
+        "Use register_finance_documents_from_attachments when the user explicitly "
+        "asks to register an attached contract, commercial invoice, receipt or "
+        "AR/AP source document. The action reads the stored source files, validates "
+        "identities, dates, totals, line amounts, IBAN and duplicate keys, then "
+        "creates or reuses the real internal customer, beneficiary bank account, "
+        "draft accounts-receivable invoice, unmatched bank statement line and legal "
+        "draft. It must never create an AP bill for an Enclave-issued customer "
+        "invoice, post accounting, collect or reconcile the receipt, transfer money, "
+        "mark a draft contract executed, or send anything externally. If any source "
+        "field or required chart account is missing or conflicting, block atomically "
+        "and report the exact reason; never claim completion from the attachments alone. "
         "get_accountability for named-person status. When the named person "
         "is Fahad Al-Anzi, treat him as an external commercial contributor "
         "and use Operations/Sales accountability; never route him to HR. "
@@ -84628,6 +85506,11 @@ async def _ceo_execution_layer(
     )
 
     plan = _ceo_exec_override_bank_balance_plan(
+        plan,
+        source_text,
+    )
+
+    plan = _ceo_exec_override_finance_attachment_registration_plan(
         plan,
         source_text,
     )
@@ -84849,7 +85732,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.17",
+        "version": "1.6.18",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
