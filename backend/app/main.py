@@ -2145,6 +2145,37 @@ async def chat_with_agent(
                 ceo_orchestration
                 and ceo_orchestration.get("delegated")
             ):
+                ceo_execution = {
+                    "handled": True,
+                    "title": "Internal CEO work order created; execution evidence pending",
+                    "actions": [
+                        {
+                            "type": "ceo_work_order_created",
+                            "agent_slug": "ceo",
+                            "title": str(
+                                ceo_orchestration.get("title")
+                                or "Internal CEO work order"
+                            ),
+                            "status": "pending_execution",
+                            "record": {
+                                "id": ceo_orchestration.get("work_order_id"),
+                                "status": ceo_orchestration.get("status") or "in_progress",
+                                "delegations": ceo_orchestration.get("delegations") or [],
+                            },
+                            "reason": (
+                                "تم حفظ الطلب كأمر عمل داخلي، لكن لم أعتبره منفذًا؛ "
+                                "لا يوجد دليل سجل تنفيذي مباشر حتى الآن."
+                            ),
+                        }
+                    ],
+                    "artifact_generation": False,
+                    "safety": {
+                        "execution_claim_requires_record_evidence": True,
+                    },
+                    "rules": {
+                        "execution_claim_requires_record_evidence": True,
+                    },
+                }
                 effective_instructions = (
                     effective_instructions
                     + "\n\nINTERNAL CEO ORCHESTRATION RESULTS:\n"
@@ -77323,6 +77354,7 @@ async def _ceo_orchestrate_request(
                 "kind": "ceo_delegation",
                 "parent_work_order_id": str(work_order.id),
                 "accountable_person": accountable_person,
+                "execution_evidence_required": True,
                 "requires_user_approval": bool(
                     item.get(
                         "requires_user_approval",
@@ -77386,30 +77418,13 @@ async def _ceo_orchestrate_request(
         except Exception as exc:
             internal_error = type(exc).__name__
 
-        hold = (
-            bool(
-                item.get(
-                    "requires_user_approval",
-                    False,
-                )
-            )
-            or bool(
-                item.get(
-                    "requires_external_action",
-                    False,
-                )
-            )
-            or bool(internal_error)
-        )
-
-        if hold:
-            child.status = "pending"
-            pending_count += 1
-        else:
-            child.status = "completed"
-            child.completed_at = _cf_datetime.now(
-                _cf_timezone.utc
-            )
+        # A specialist's prose is advisory analysis, not proof that the
+        # requested business action occurred.  Keep every delegated item
+        # pending until a supported live action returns persisted evidence.
+        # This prevents the old false-success path where a model response
+        # silently changed a work order to completed.
+        child.status = "pending"
+        pending_count += 1
 
         child.payload = {
             **(child.payload or {}),
@@ -77439,11 +77454,8 @@ async def _ceo_orchestrate_request(
         "delegations": results,
     }
 
-    if results and pending_count == 0:
-        work_order.status = "completed"
-        work_order.completed_at = _cf_datetime.now(
-            _cf_timezone.utc
-        )
+    if results:
+        work_order.status = "in_progress"
 
     await write_audit_log(
         db,
@@ -78534,6 +78546,7 @@ _CEO_EXEC_ACTIONS = {
     "prepare_due_invoices",
     "create_commercial_proposal",
     "generate_financial_proposal_artifacts",
+    "execute_internal_api",
 }
 
 
@@ -81608,6 +81621,275 @@ async def _ceo_exec_tp_generate_artifacts(db: AsyncSession, client_name: str, co
     return {"status": "executed", "operation": "technical_proposal_artifacts_generated", "record_type": "sales_technical_proposal", "record": {"id": str(proposal["id"]), "client_name": proposal["client_name"], "version": int(proposal["version"]), "status": proposal["status"], "reference": payload["reference"]}, "artifacts": artifacts, "external_send": False}
 
 
+_CEO_INTERNAL_BLOCKED_PATH_MARKERS = (
+    "/api/chat",
+    "/api/conversations",
+    "/api/memories",
+    "/api/internal/",
+    "/upload",
+    "/payment",
+    "payments",
+    "transfer",
+    "/approve",
+    "/reject",
+    "/post",
+    "/apply",
+    "send",
+    "publish",
+    "deploy",
+    "filing",
+    "external",
+)
+
+
+def _ceo_exec_internal_route_is_allowed(method: str, path: str):
+    method = str(method or "").strip().upper()
+    path = str(path or "").strip()
+    folded = path.casefold()
+    return (
+        method in {"GET", "POST", "PUT", "PATCH"}
+        and folded.startswith("/api/")
+        and not any(marker in folded for marker in _CEO_INTERNAL_BLOCKED_PATH_MARKERS)
+    )
+
+
+def _ceo_exec_internal_route_catalog():
+    """Return the live internal API contract available to the CEO planner.
+
+    The model may select only a route that actually exists in this running
+    FastAPI application.  The executor validates it again before making the
+    internal call, so a prose-only specialist cannot become a write claim.
+    """
+
+    import inspect
+    from fastapi.routing import APIRoute
+
+    catalog = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        path = str(route.path)
+        for method in sorted(route.methods or set()):
+            if not _ceo_exec_internal_route_is_allowed(method, path):
+                continue
+            item = {
+                "method": method,
+                "path": path,
+                "operation": str(route.name or "").strip(),
+            }
+            body_field = getattr(route, "body_field", None)
+            model = getattr(body_field, "type_", None)
+            if model is not None and hasattr(model, "model_json_schema"):
+                try:
+                    schema = model.model_json_schema()
+                    item["body_schema"] = {
+                        "type": schema.get("type"),
+                        "required": schema.get("required", []),
+                        "properties": {
+                            key: {
+                                field: value.get(field)
+                                for field in ("type", "format", "enum", "default")
+                                if field in value
+                            }
+                            for key, value in (schema.get("properties") or {}).items()
+                        },
+                    }
+                except Exception:
+                    pass
+            catalog.append(item)
+
+    catalog.sort(key=lambda item: (item["path"], item["method"]))
+    return catalog[:240]
+
+
+def _ceo_exec_internal_response_has_evidence(payload):
+    if isinstance(payload, list):
+        return bool(payload)
+    if not isinstance(payload, dict) or not payload:
+        return False
+    evidence_keys = {
+        "id",
+        "record",
+        "data",
+        "status",
+        "created",
+        "updated",
+        "summary",
+        "items",
+        "rows",
+        "results",
+        "task_id",
+        "attachment",
+        "attachments",
+    }
+    return bool(evidence_keys.intersection(payload))
+
+
+async def _ceo_exec_internal_api_call(
+    action: dict,
+    source_text: str,
+):
+    """Execute one existing internal API route and return its live response."""
+
+    data = action.get("data") or {}
+    method = str(data.get("method") or "").strip().upper()
+    path = str(data.get("path") or "").strip()
+    query = data.get("query") or {}
+    body = data.get("body", None)
+
+    if not _ceo_exec_internal_route_is_allowed(method, path):
+        return {
+            "status": "blocked",
+            "operation": "internal_api_blocked",
+            "reason": "The requested internal route is not allowed by the CEO safety policy.",
+            "route": {"method": method, "path": path},
+        }
+
+    route_exists = any(
+        _ceo_exec_internal_route_is_allowed(
+            route_method,
+            getattr(route, "path", ""),
+        )
+        and getattr(route, "path", None) == path
+        and route_method == method
+        for route in app.routes
+        for route_method in (getattr(route, "methods", None) or set())
+    )
+    if not route_exists:
+        return {
+            "status": "blocked",
+            "operation": "internal_api_route_not_found",
+            "reason": "The requested route does not exist in the live system.",
+            "route": {"method": method, "path": path},
+        }
+
+    if not isinstance(query, dict):
+        return {
+            "status": "blocked",
+            "operation": "internal_api_invalid_query",
+            "reason": "Internal route query parameters must be an object.",
+        }
+
+    if body is not None and not isinstance(body, (dict, list)):
+        return {
+            "status": "blocked",
+            "operation": "internal_api_invalid_body",
+            "reason": "Internal route body must be a JSON object or array.",
+        }
+
+    try:
+        from urllib.parse import urlencode
+
+        request_body = (
+            json.dumps(body, ensure_ascii=False).encode("utf-8")
+            if body is not None
+            else b""
+        )
+        query_string = urlencode(query, doseq=True).encode("utf-8")
+        response_status = None
+        response_body = bytearray()
+        received_request = False
+
+        async def receive():
+            nonlocal received_request
+            if not received_request:
+                received_request = True
+                return {
+                    "type": "http.request",
+                    "body": request_body,
+                    "more_body": False,
+                }
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            nonlocal response_status
+            if message.get("type") == "http.response.start":
+                response_status = int(message.get("status", 500))
+            elif message.get("type") == "http.response.body":
+                response_body.extend(message.get("body", b"") or b"")
+
+        await app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": method,
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode("utf-8"),
+                "query_string": query_string,
+                "headers": [
+                    (b"host", b"ceo.internal"),
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(request_body)).encode("ascii")),
+                    (b"x-enclave-ceo-internal", b"1"),
+                ],
+                "client": ("127.0.0.1", 0),
+                "server": ("ceo.internal", 80),
+                "root_path": "",
+            },
+            receive,
+            send,
+        )
+    except Exception as exc:
+        return {
+            "status": "blocked",
+            "operation": "internal_api_execution_error",
+            "reason": "The internal route could not be executed: " + type(exc).__name__,
+            "route": {"method": method, "path": path},
+        }
+
+    response_status = int(response_status or 500)
+    try:
+        payload = json.loads(bytes(response_body).decode("utf-8"))
+    except Exception:
+        payload = {
+            "raw_response": bytes(response_body).decode(
+                "utf-8",
+                errors="replace",
+            )[:4000]
+        }
+
+    route_evidence = {
+        "http_status": response_status,
+        "method": method,
+        "path": path,
+        "response": payload,
+    }
+
+    if not 200 <= response_status < 300:
+        return {
+            "status": "blocked",
+            "operation": "internal_api_rejected",
+            "reason": f"The live route returned HTTP {response_status}; no completion was claimed.",
+            "evidence": route_evidence,
+        }
+
+    if method == "GET":
+        return {
+            "status": "read_only",
+            "operation": "internal_api_read",
+            "evidence": route_evidence,
+        }
+
+    if not _ceo_exec_internal_response_has_evidence(payload):
+        return {
+            "status": "blocked",
+            "operation": "internal_api_missing_record_evidence",
+            "reason": "The route returned success without a record or result body; no completion was claimed.",
+            "evidence": route_evidence,
+        }
+
+    return {
+        "status": "executed",
+        "operation": "internal_api_executed",
+        "record_type": "internal_api_response",
+        "record": payload,
+        "evidence": route_evidence,
+        "external_send": False,
+    }
+
+
 async def _ceo_exec_action(
     db: AsyncSession,
     action: dict,
@@ -81629,6 +81911,13 @@ async def _ceo_exec_action(
             **base,
             "status": "blocked",
             "reason": "Action is not allowed by the CEO execution policy.",
+        }
+
+    if action_type == "execute_internal_api":
+        result = await _ceo_exec_internal_api_call(action, source_text)
+        return {
+            **base,
+            **result,
         }
 
     if action_type == "list_pending_tasks":
@@ -82821,6 +83110,92 @@ def _ceo_exec_override_task_lookup_plan(plan: dict, source_text: str):
     }
 
 
+def _ceo_exec_override_dashboard_plan(plan: dict, source_text: str):
+    """Route executive report requests to live dashboard endpoints."""
+
+    folded = str(source_text or "").casefold()
+    report_word = any(
+        marker in folded
+        for marker in (
+            "تقرير",
+            "ملخص",
+            "داشبورد",
+            "لوحة",
+            "المؤشرات",
+            "عدد",
+            "كم",
+            "حالة",
+            "من النظام",
+            "من السستم",
+            "راجع السستم",
+            "راجع النظام",
+            "report",
+            "dashboard",
+            "summary",
+            "metrics",
+            "live",
+            "from the system",
+        )
+    )
+    request_word = any(
+        marker in folded
+        for marker in (
+            "اعطني",
+            "أعطني",
+            "أبي",
+            "ابي",
+            "وش",
+            "ما",
+            "كم",
+            "show",
+            "give",
+            "what",
+            "how many",
+        )
+    )
+    if not report_word or not request_word or _ceo_exec_is_mutation_request(source_text):
+        return plan
+
+    if any(marker in folded for marker in ("موارد بشرية", "الموظفين", "الموظفون", "hr", "human resources")):
+        path = "/api/hr/monthly-dashboard"
+        title = "Read live HR dashboard"
+    elif any(marker in folded for marker in ("مالية", "المالية", "finance", "cash", "revenue", "مصروف")):
+        path = "/api/finance/reports/dashboard"
+        title = "Read live Finance dashboard"
+    elif any(marker in folded for marker in ("مبيعات", "المبيعات", "sales", "pipeline", "بايبلاين")):
+        path = "/api/sales/forecast-dashboard"
+        title = "Read live Sales dashboard"
+    elif any(marker in folded for marker in ("تسويق", "التسويق", "marketing", "campaign", "حملة")):
+        path = "/api/marketing/performance-dashboard"
+        title = "Read live Marketing dashboard"
+    elif any(marker in folded for marker in ("حكوم", "امتثال", "شهادة", "government", "compliance", "certificate")):
+        path = "/api/hr/government-compliance/summary"
+        title = "Read live government-compliance register"
+    else:
+        path = "/api/dashboard"
+        title = "Read live executive dashboard"
+
+    return {
+        "handled": True,
+        "title": title,
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "execute_internal_api",
+                "agent_slug": "ceo",
+                "title": title,
+                "data": {
+                    "method": "GET",
+                    "path": path,
+                    "query": {},
+                },
+            }
+        ],
+        "routing": "deterministic_live_dashboard_read",
+    }
+
+
 def _ceo_exec_override_organizational_structure_plan(
     plan: dict,
     source_text: str,
@@ -83043,6 +83418,19 @@ def _ceo_exec_override_hr_vacancy_lookup_plan(
             "تحقق",
             "شيك",
             "كم عدد",
+            "تقرير",
+            "ملخص",
+            "لوحة",
+            "داشبورد",
+            "المؤشرات",
+            "اعطني",
+            "أعطني",
+            "أبي",
+            "ابي",
+            "report",
+            "dashboard",
+            "summary",
+            "metrics",
             "status",
             "is it",
             "check",
@@ -83312,8 +83700,39 @@ def _ceo_exec_is_mutation_request(source_text: str):
     handed to an advisory specialist whose prose could be mistaken for a write.
     """
 
+    import re
+
     folded = str(source_text or "").casefold()
     mutation_word = _ceo_exec_has_explicit_mutation_intent(source_text)
+    direct_command = any(
+        marker in folded
+        for marker in (
+            "سو لي",
+            "سوي لي",
+            "جهز لي",
+            "جهّز لي",
+            "اعمل لي",
+            "نفذ لي",
+            "نفّذ لي",
+            "طبق لي",
+            "طبّق لي",
+            "راجع لي",
+            "اربط لي",
+            "do this",
+            "do it",
+            "make this",
+            "prepare this",
+            "execute this",
+            "run this",
+        )
+    )
+    direct_command = direct_command or bool(
+        re.search(
+            r"(?:^|\s)(?:سو|سوي|جهز|جهّز|اعمل|نفذ|نفّذ|طبق|طبّق|راجع|اربط)"
+            r"\s+(?:لي|هذا|هذي|شي|شيء|التقرير|الملف|الموضوع)",
+            folded,
+        )
+    )
     record_word = any(
         marker in folded
         for marker in (
@@ -83336,6 +83755,20 @@ def _ceo_exec_is_mutation_request(source_text: str):
             "مستند",
             "مرشح",
             "رواتب",
+            "تقرير",
+            "داشبورد",
+            "لوحة",
+            "نموذج",
+            "قالب",
+            "ملف",
+            "شهادة",
+            "امتثال",
+            "حملة",
+            "سياسة",
+            "اجتماع",
+            "مالية",
+            "المالية",
+            "تمويل",
             "vacancy",
             "job",
             "employee",
@@ -83350,10 +83783,21 @@ def _ceo_exec_is_mutation_request(source_text: str):
             "contract",
             "candidate",
             "payroll",
+            "report",
+            "dashboard",
+            "template",
+            "file",
+            "certificate",
+            "compliance",
+            "campaign",
+            "policy",
+            "meeting",
+            "finance",
+            "financial",
             "record",
         )
     )
-    return mutation_word and record_word
+    return (mutation_word or direct_command) and record_word
 
 
 def _ceo_exec_is_record_lookup_request(source_text: str):
@@ -83373,6 +83817,7 @@ def _ceo_exec_is_record_lookup_request(source_text: str):
             "وش",
             "ما",
             "هل",
+            "كم",
             "what",
             "which",
             "where",
@@ -83401,12 +83846,32 @@ def _ceo_exec_is_record_lookup_request(source_text: str):
             "تحقق",
             "شيك",
             "كم عدد",
+            "تقرير",
+            "ملخص",
+            "لوحة",
+            "داشبورد",
+            "المؤشرات",
+            "اعطني",
+            "أعطني",
+            "أبي",
+            "ابي",
+            "عدد",
+            "من النظام",
+            "من السستم",
+            "راجع السستم",
+            "راجع النظام",
+            "report",
+            "dashboard",
+            "summary",
+            "metrics",
             "status",
             "is it",
             "check",
             "show",
             "list",
             "how many",
+            "live",
+            "from the system",
         )
     )
     record_word = any(
@@ -83426,6 +83891,14 @@ def _ceo_exec_is_record_lookup_request(source_text: str):
             "عقد",
             "مرشح",
             "رواتب",
+            "تقرير",
+            "داشبورد",
+            "لوحة",
+            "مؤشر",
+            "شهادة",
+            "امتثال",
+            "حملة",
+            "سياسة",
             "vacancy",
             "job",
             "employee",
@@ -83439,6 +83912,13 @@ def _ceo_exec_is_record_lookup_request(source_text: str):
             "contract",
             "candidate",
             "payroll",
+            "report",
+            "dashboard",
+            "metric",
+            "certificate",
+            "compliance",
+            "campaign",
+            "policy",
             "record",
         )
     )
@@ -83584,6 +84064,15 @@ def _ceo_exec_truth_response(evidence: dict):
                 lines.append("التفصيل: " + str(item["reason"]))
             continue
 
+        if status == "pending_execution":
+            lines.append("الحالة: مسجلة كطلب عمل داخلي؛ لم يتم اعتبارها منفذة.")
+            record = item.get("record") or {}
+            if record.get("id"):
+                lines.append("معرّف أمر العمل: " + str(record["id"]))
+            if item.get("reason"):
+                lines.append("التفصيل: " + str(item["reason"]))
+            continue
+
         if status == "executed":
             record = item.get("record")
             artifacts = item.get("artifacts")
@@ -83614,6 +84103,14 @@ def _ceo_exec_truth_response(evidence: dict):
                     lines.append("معرّف السجل: " + str(record_id))
                 if record.get("status") is not None:
                     lines.append("حالة السجل: " + str(record.get("status")))
+                if not record_id and record.get("status") is None:
+                    compact = json.dumps(
+                        record,
+                        ensure_ascii=False,
+                        default=str,
+                        separators=(",", ":"),
+                    )
+                    lines.append("الدليل المباشر: " + compact[:1800])
             if not isinstance(record, dict) and not isinstance(artifacts, list):
                 compact = json.dumps(
                     {
@@ -83725,6 +84222,7 @@ async def _ceo_execution_layer(
         "artifact_generation": snapshot["artifact_generation"],
         "safety": snapshot["safety"],
     }
+    internal_route_catalog = _ceo_exec_internal_route_catalog()
 
     instructions = (
         "You are the strict execution planner for Enclave CEO. "
@@ -83741,6 +84239,10 @@ async def _ceo_execution_layer(
         "Allowed actions: "
         + ", ".join(sorted(_CEO_EXEC_ACTIONS))
         + ". "
+        "Use execute_internal_api when the request maps to an existing live internal API route in the INTERNAL ROUTE CATALOG. "
+        "For that action, data must contain method, exact path, query object and/or JSON body. "
+        "Never invent a route; choose only an exact catalog path. GET is read-only. "
+        "POST/PUT/PATCH may be used only for internal records and must not target payment, transfer, approval, rejection, posting, publishing, deployment or external routes. "
         "Only create a Sales account/opportunity if the user explicitly "
         "asks to create/register/add a client/project/opportunity. "
         "If the user asks to prepare or assess a financial/commercial "
@@ -83891,6 +84393,12 @@ async def _ceo_execution_layer(
             ensure_ascii=False,
             default=str,
         )[:30000]
+        + "\n\nINTERNAL ROUTE CATALOG (live application routes; exact paths only):\n"
+        + json.dumps(
+            internal_route_catalog,
+            ensure_ascii=False,
+            default=str,
+        )[:30000]
     )
 
     planner_error = None
@@ -83935,6 +84443,11 @@ async def _ceo_execution_layer(
     )
 
     plan = _ceo_exec_override_task_lookup_plan(
+        plan,
+        source_text,
+    )
+
+    plan = _ceo_exec_override_dashboard_plan(
         plan,
         source_text,
     )
@@ -83998,6 +84511,7 @@ async def _ceo_execution_layer(
             "get_accountability",
             "get_client_state",
             "get_proposal_readiness",
+            "execute_internal_api",
         }
         actions = [
             item
@@ -84010,6 +84524,14 @@ async def _ceo_execution_layer(
             or any(
                 str(item.get("type") or "").strip()
                 not in read_actions
+                or (
+                    str(item.get("type") or "").strip()
+                    == "execute_internal_api"
+                    and str(
+                        (item.get("data") or {}).get("method") or ""
+                    ).strip().upper()
+                    != "GET"
+                )
                 for item in actions
             )
         ):
@@ -84107,6 +84629,9 @@ async def _ceo_execution_layer(
             "waiting_approval": sum(
                 x.get("status") == "waiting_approval" for x in results
             ),
+            "pending_execution": sum(
+                x.get("status") == "pending_execution" for x in results
+            ),
             "blocked": sum(x.get("status") == "blocked" for x in results),
             "read_only": sum(x.get("status") == "read_only" for x in results),
         },
@@ -84143,7 +84668,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.14",
+        "version": "1.6.15",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

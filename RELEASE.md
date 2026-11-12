@@ -1,3 +1,24 @@
+# Enclave v1.6.15 — Cross-department CEO execution gate
+
+This release fixes the broader CEO failure mode where a request outside the
+small deterministic action list was handed to a specialist model and then
+reported as if prose were proof of execution.
+
+- The CEO planner receives the live internal API route contract and may call
+  only an exact approved internal route.
+- GET requests return live system evidence; internal POST/PUT/PATCH requests
+  return success only when the route responds with record evidence.
+- Payment, transfer, approval, posting, publishing, deployment and external
+  routes are blocked from the generic broker.
+- Specialist/delegation prose can no longer mark a task completed. Such work
+  remains an in-progress work order until a supported action produces evidence.
+- Executive, HR, Finance, Sales, Marketing and government-compliance report
+  requests are routed to live dashboard/register endpoints.
+
+No external communication, payment, bank transfer or data reset is performed.
+
+---
+
 # Enclave v1.6.14 — Deterministic CEO execution resume
 
 This release safely completes the v1.6.13 source state after its installer
