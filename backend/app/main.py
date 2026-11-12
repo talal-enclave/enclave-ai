@@ -1804,6 +1804,12 @@ async def chat_with_agent(
         db.add(conversation)
         await db.flush()
 
+    # Keep the scalar identifier independent of ORM expiration.  The CEO
+    # execution layer may roll back a failed action; after rollback SQLAlchemy
+    # can expire the Conversation instance, and touching conversation.id while
+    # saving the truthful error response can otherwise surface as a generic 500.
+    conversation_id_value = conversation.id
+
     # Load global memory shared by all agents
     global_memory_result = await db.execute(
         select(Memory)
@@ -1885,7 +1891,7 @@ async def chat_with_agent(
     result = await db.execute(
         select(Message)
         .where(
-            Message.conversation_id == conversation.id
+            Message.conversation_id == conversation_id_value
         )
         .order_by(Message.created_at.desc())
         .limit(20)
@@ -2007,7 +2013,7 @@ async def chat_with_agent(
             ceo_attachment_context = (
                 await _ceo_attachment_context(
                     db,
-                    conversation.id,
+                    conversation_id_value,
                 )
             )
 
@@ -2037,7 +2043,7 @@ async def chat_with_agent(
             ceo_execution = await _ceo_execution_layer(
                 db,
                 orchestration_input,
-                conversation.id,
+                conversation_id_value,
                 conversation_context=recent_user_context,
             )
 
@@ -2138,7 +2144,7 @@ async def chat_with_agent(
                 ceo_orchestration = await _ceo_orchestrate_request(
                     db,
                     orchestration_input,
-                    conversation.id,
+                    conversation_id_value,
                 )
 
             if (
@@ -2220,7 +2226,7 @@ async def chat_with_agent(
 
     # Save user message
     user_message = Message(
-        conversation_id=conversation.id,
+        conversation_id=conversation_id_value,
         role="user",
         content=request.message,
     )
@@ -2266,7 +2272,7 @@ async def chat_with_agent(
 
     # Save assistant response
     assistant_message = Message(
-        conversation_id=conversation.id,
+        conversation_id=conversation_id_value,
         role="assistant",
         content=answer,
         message_metadata={
@@ -2340,7 +2346,7 @@ async def chat_with_agent(
                 db.add(
                     Memory(
                         agent_id=memory_agent_id,
-                        source_conversation_id=conversation.id,
+                        source_conversation_id=conversation_id_value,
                         scope=candidate_scope,
                         memory_type=memory_candidate[
                             "memory_type"
@@ -2437,7 +2443,7 @@ async def chat_with_agent(
                 db.add(
                     Task(
                         agent_id=agent.id,
-                        source_conversation_id=conversation.id,
+                        source_conversation_id=conversation_id_value,
                         title=task_candidate["title"],
                         description=task_candidate[
                             "description"
@@ -2494,7 +2500,7 @@ async def chat_with_agent(
                 db.add(
                     Approval(
                         agent_id=agent.id,
-                        source_conversation_id=conversation.id,
+                        source_conversation_id=conversation_id_value,
                         title=approval_candidate["title"],
                         description=approval_candidate[
                             "description"
@@ -2519,7 +2525,7 @@ async def chat_with_agent(
     await db.commit()
 
     return {
-        "conversation_id": str(conversation.id),
+        "conversation_id": str(conversation_id_value),
         "agent": agent.slug,
         "agent_name": agent.name_en,
         "model": OPENAI_MODEL,
@@ -79104,6 +79110,8 @@ async def _ceo_exec_create_hr_vacancy(
             await db.flush()
 
     manager_position = None
+    manager_assignment_error = None
+    manager_field = None
     if manager_position_code:
         manager_position = next(
             (
@@ -79115,32 +79123,47 @@ async def _ceo_exec_create_hr_vacancy(
             None,
         )
         if manager_position is None:
-            await db.rollback()
-            return {
-                "status": "blocked",
-                "reason": (
-                    "The requested direct-manager position does not exist in "
-                    "the live HR position register."
-                ),
-            }
-        manager_field = _ceo_org_optional_set(
-            position,
-            manager_position.id,
-            "reports_to_position_id",
-            "manager_position_id",
-            "parent_position_id",
-            "supervisor_position_id",
-        )
-        if not manager_field:
-            await db.rollback()
-            return {
-                "status": "blocked",
-                "reason": (
-                    "The live HR position model has no supported reporting-line "
-                    "field, so the requested direct manager was not written."
-                ),
-            }
-        await db.flush()
+            manager_assignment_error = (
+                "The requested direct-manager position does not exist in "
+                "the live HR position register."
+            )
+        else:
+            # Manager assignment is best-effort and isolated from vacancy
+            # creation.  A reporting-line constraint or legacy schema mismatch
+            # must not turn a valid vacancy request into HTTP 500 or roll back
+            # the vacancy itself.
+            manager_savepoint = None
+            try:
+                manager_savepoint = await db.begin_nested()
+                manager_field = _ceo_org_optional_set(
+                    position,
+                    manager_position.id,
+                    "reports_to_position_id",
+                    "manager_position_id",
+                    "parent_position_id",
+                    "supervisor_position_id",
+                )
+                if not manager_field:
+                    manager_assignment_error = (
+                        "The live HR position model has no supported "
+                        "reporting-line field."
+                    )
+                    await manager_savepoint.rollback()
+                    manager_field = None
+                else:
+                    await db.flush()
+                    await manager_savepoint.commit()
+            except Exception as exc:
+                if manager_savepoint is not None:
+                    try:
+                        await manager_savepoint.rollback()
+                    except Exception:
+                        pass
+                manager_field = None
+                manager_assignment_error = (
+                    "Direct-manager assignment was not applied: "
+                    + type(exc).__name__
+                )
 
     existing_vacancy = (
         await db.execute(
@@ -79210,9 +79233,15 @@ async def _ceo_exec_create_hr_vacancy(
         "description": verified.description,
         "manager_position_id": (
             str(manager_position.id)
-            if manager_position is not None
+            if manager_position is not None and manager_field
             else None
         ),
+        "manager_assignment_status": (
+            "assigned"
+            if manager_position is not None and manager_field
+            else "not_assigned"
+        ),
+        "manager_assignment_error": manager_assignment_error,
     }
     await write_audit_log(
         db,
@@ -79237,6 +79266,12 @@ async def _ceo_exec_create_hr_vacancy(
         "external_send": False,
         "job_board_published": False,
         "approval_required": False,
+        "manager_assignment_status": (
+            "assigned"
+            if manager_position is not None and manager_field
+            else "not_assigned"
+        ),
+        "manager_assignment_error": manager_assignment_error,
     }
 
 async def _ceo_exec_get_hr_vacancy_state(
@@ -84103,6 +84138,21 @@ def _ceo_exec_truth_response(evidence: dict):
                     lines.append("معرّف السجل: " + str(record_id))
                 if record.get("status") is not None:
                     lines.append("حالة السجل: " + str(record.get("status")))
+                if record.get("department_code"):
+                    lines.append("رمز الإدارة: " + str(record.get("department_code")))
+                if record.get("position_code"):
+                    lines.append("رمز الوظيفة: " + str(record.get("position_code")))
+                if record.get("manager_assignment_status"):
+                    manager_status = str(record.get("manager_assignment_status"))
+                    lines.append(
+                        "حالة ربط المدير المباشر: "
+                        + ("تم الربط" if manager_status == "assigned" else "لم يتم الربط")
+                        + "."
+                    )
+                if record.get("manager_assignment_error"):
+                    lines.append(
+                        "ملاحظة: " + str(record.get("manager_assignment_error"))
+                    )
                 if not record_id and record.get("status") is None:
                     compact = json.dumps(
                         record,
@@ -84668,7 +84718,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.15",
+        "version": "1.6.16",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

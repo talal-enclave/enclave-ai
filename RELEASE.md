@@ -1,3 +1,20 @@
+# Enclave v1.6.16 — Reliable vacancy creation
+
+This release hardens the internal HR vacancy write path after a vacancy request
+returned a generic HTTP 500.
+
+- Vacancy creation is persisted and verified independently of optional manager
+  reporting-line assignment.
+- Legacy reporting-line schema errors no longer roll back a valid vacancy or
+  become an unhandled server error.
+- Failed CEO actions keep a stable conversation identifier while the truthful
+  blocked result is saved, preventing rollback-related generic HTTP 500 errors.
+- The result reports the real vacancy ID, position, department and whether the
+  direct manager was assigned.
+- No external publication, candidate contact, payment or data reset occurs.
+
+---
+
 # Enclave v1.6.15 — Cross-department CEO execution gate
 
 This release fixes the broader CEO failure mode where a request outside the
