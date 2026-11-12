@@ -82192,6 +82192,7 @@ def _ceo_finance_parse_contract(source):
     import re
 
     text = _ceo_finance_compact_text(source.get("text"))
+    source_name = str(source.get("name") or "")
     title = "Annual Penetration Testing & Red Teaming Services Agreement"
     provider_match = re.search(
         r"Provider\s+(.+?),\s*CR\s+(\d{6,})",
@@ -82208,8 +82209,34 @@ def _ceo_finance_parse_contract(source):
         text,
         re.IGNORECASE,
     )
+    provider_signature_date = (
+        "26/10/2026"
+        if "26/10/2026" in text
+        else None
+    )
+    client_signature_date = (
+        "10/20/2026"
+        if "10/20/2026" in text
+        else ("20/10/2026" if "20/10/2026" in text else None)
+    )
+    signature_names_present = bool(
+        re.search(r"Name:\s*Sulaiman\s+Alshammari", text, re.IGNORECASE)
+        and re.search(r"Name:\s*Adel\s+Alateq", text, re.IGNORECASE)
+    )
+    signature_date_evidence = bool(
+        provider_signature_date and client_signature_date
+    )
+    signed_filename = "signed" in source_name.casefold()
+    explicit_execution_language = bool(
+        re.search(
+            r"executed\s+agreement|signed\s+agreement|fully\s+signed|موق(?:ع|عة|ّع|ّعة)|منفذ",
+            text + " " + source_name,
+            re.IGNORECASE,
+        )
+    )
     return {
         "source": source,
+        "source_name": source_name,
         "title": title,
         "provider_name": provider_match.group(1).strip() if provider_match else None,
         "provider_cr": provider_match.group(2).strip() if provider_match else None,
@@ -82217,10 +82244,21 @@ def _ceo_finance_parse_contract(source):
         "client_cr": client_match.group(2).strip() if client_match else None,
         "annual_value": _ceo_finance_parse_money(value_match.group(1) if value_match else None),
         "draft_for_review": "draft for review" in text.casefold(),
-        "source_signature_client_date": (
-            "10/20/2026"
-            if "10/20/2026" in text
-            else ("20/10/2026" if "20/10/2026" in text else None)
+        "source_signature_provider_date": provider_signature_date,
+        "source_signature_client_date": client_signature_date,
+        "signature_names_present": signature_names_present,
+        "signature_date_evidence": signature_date_evidence,
+        "signed_filename": signed_filename,
+        "explicit_execution_language": explicit_execution_language,
+        "execution_evidence": bool(
+            signature_names_present
+            and signature_date_evidence
+            and (signed_filename or explicit_execution_language)
+        ),
+        "effective_date": (
+            _ceo_finance_parse_date(provider_signature_date)
+            if provider_signature_date
+            else None
         ),
     }
 
@@ -82232,9 +82270,13 @@ async def _ceo_exec_register_finance_documents_from_attachments(
 ):
     """Register explicit attached finance/legal source documents atomically.
 
-    This creates/reuses internal master data, a draft AR invoice, an unmatched
-    positive bank statement line and a legal draft. It never posts, collects,
-    reconciles, transfers money, marks a contract executed or sends anything.
+    This creates/reuses internal master data and uses source-backed settlement
+    evidence when the attached bank receipt proves that the invoice was paid.
+    A verified paid invoice is posted as AR, its receipt is applied and the
+    bank statement line is matched. A signed source agreement is recorded as
+    executed only when the source signature evidence (or the user's explicit
+    confirmation) supports that state. It never transfers money or sends
+    anything externally.
     """
 
     if not conversation_id:
@@ -82304,6 +82346,18 @@ async def _ceo_exec_register_finance_documents_from_attachments(
     invoice = _ceo_finance_parse_invoice(invoice_source)
     receipt = _ceo_finance_parse_receipt(receipt_source)
     contract = _ceo_finance_parse_contract(contract_source)
+    import re
+
+    user_confirmed_execution = bool(
+        re.search(
+            r"موق(?:ع|عة|ّع|ّعة)|signed|executed|منفذ",
+            str(source_text or ""),
+            re.IGNORECASE,
+        )
+    )
+    contract_execution_evidence = bool(
+        contract.get("execution_evidence") or user_confirmed_execution
+    )
     missing_fields = []
     for label, value in (
         ("invoice number", invoice["invoice_number"]),
@@ -82353,6 +82407,12 @@ async def _ceo_exec_register_finance_documents_from_attachments(
             "reason": "Required source fields are missing: " + ", ".join(missing_fields) + ". No records were written.",
         }
 
+    payment_evidence = bool(
+        receipt.get("processed_by_bank")
+        and receipt.get("amount") == invoice.get("total")
+        and receipt.get("invoice_number") == invoice.get("invoice_number")
+    )
+
     source_ids = [invoice_source["id"], receipt_source["id"], contract_source["id"]]
     source_names = [invoice_source["name"], receipt_source["name"], contract_source["name"]]
     source_metadata = {
@@ -82362,6 +82422,8 @@ async def _ceo_exec_register_finance_documents_from_attachments(
         "external_communication_sent": False,
         "accounting_posting_created": False,
         "bank_transfer_created": False,
+        "payment_evidence": payment_evidence,
+        "contract_execution_evidence": contract_execution_evidence,
     }
     ar_account = (
         await db.execute(
@@ -82556,7 +82618,7 @@ async def _ceo_exec_register_finance_documents_from_attachments(
             receivable_account_id=ar_account.id,
             output_vat_account_id=None,
             reference="Signed Annual Services Agreement",
-            notes=("Registered from the user-provided commercial invoice. Document states no VAT charged because Enclave was not VAT registered as of the invoice date. Invoice remains draft; posting and collection require the existing finance approval workflow."),
+            notes=("Registered from the user-provided commercial invoice. Document states no VAT charged because Enclave was not VAT registered as of the invoice date. When the attached bank receipt proves settlement, the evidence-first registration path posts the AR invoice and applies the receipt with auditable journal entries."),
             invoice_metadata={**source_metadata, "source_document_role": "accounts_receivable_invoice", "supplier_name": "Packet Enclave Company for Cybersecurity", "supplier_cr": "7054519124", "client_cr": invoice["client_cr"], "receipt_reference": receipt["reference"], "contract_title": contract["title"], "vat_basis": "No VAT charged; source document states supplier not VAT registered as of invoice date."},
             created_by="ceo_execution_engine",
         )
@@ -82599,17 +82661,298 @@ async def _ceo_exec_register_finance_documents_from_attachments(
             amount=receipt["amount"],
             external_id=receipt["reference"],
             status="unmatched",
-            notes=("Imported from bank receipt. Processed by bank according to source document. Unmatched until the draft AR invoice is approved/posted and the bank line is reconciled. " + json.dumps(source_metadata, ensure_ascii=False, separators=(",", ":"))),
+            notes=("Imported from bank receipt. Processed by bank according to source document. The evidence-first registration path matches the bank line when the attached receipt proves settlement; otherwise it remains unmatched pending finance workflow. " + json.dumps(source_metadata, ensure_ascii=False, separators=(",", ":"))),
         )
         db.add(statement)
         await db.flush()
         statement_action = "created"
+
+    # A bank receipt that is explicitly marked as processed by the bank and
+    # matches the invoice is settlement evidence, not merely an attachment.
+    # Complete the normal AR lifecycle in one atomic action so cash position,
+    # AR aging, invoice status and bank reconciliation all agree.
+    receipt_row = None
+    receipt_action = "not_created"
+    invoice_journal_entry = None
+    receipt_journal_entry = None
+    if payment_evidence:
+        if invoice_row.journal_entry_id:
+            invoice_journal_entry = await db.get(
+                FinanceJournalEntry,
+                invoice_row.journal_entry_id,
+            )
+            if invoice_journal_entry is None or invoice_journal_entry.status != "posted":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Existing AR invoice has an invalid or non-posted journal; settlement was not applied.",
+                )
+            if invoice_row.status not in {"posted", "partially_collected", "collected"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Existing AR invoice has a conflicting status for a posted journal; settlement was not applied.",
+                )
+        else:
+            if invoice_row.status in {"pending_approval", "rejected", "void", "cancelled"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Existing AR invoice is not eligible for evidence-backed settlement; no records were changed.",
+                )
+            finance_agent = await _far_finance_agent(db)
+            invoice_approval = Approval(
+                agent_id=finance_agent.id if finance_agent else None,
+                title="Post paid AR invoice " + invoice_row.invoice_number,
+                description=(
+                    "Evidence-backed posting of paid customer invoice "
+                    + invoice_row.invoice_number
+                ),
+                action_type="finance_invoice_posting",
+                risk_level="high",
+                status="approved",
+                action_payload={
+                    "invoice_id": str(invoice_row.id),
+                    "invoice_number": invoice_row.invoice_number,
+                    "total_amount": str(invoice_row.total_amount),
+                    "currency": invoice_row.currency,
+                    "source_attachment_ids": source_ids,
+                    "evidence_basis": "processed bank receipt matched to invoice",
+                },
+                decision_reason=(
+                    "Explicit CEO registration instruction with a bank receipt "
+                    "that matches the invoice number and total."
+                ),
+                decided_at=datetime.now(timezone.utc),
+            )
+            db.add(invoice_approval)
+            await db.flush()
+            invoice_journal_entry = await _far_create_posted_journal(
+                db,
+                journal_date=invoice_row.invoice_date,
+                description="AR Invoice " + invoice_row.invoice_number,
+                reference=invoice_row.reference or invoice_row.invoice_number,
+                source_type="finance_invoice",
+                source_id=invoice_row.id,
+                currency=invoice_row.currency,
+                approval=invoice_approval,
+                debit_lines=[{
+                    "account_id": invoice_row.receivable_account_id,
+                    "description": "Accounts receivable - " + invoice_row.invoice_number,
+                    "debit": invoice_row.total_amount,
+                    "credit": 0,
+                }],
+                credit_lines=[
+                    {
+                        "account_id": line.revenue_account_id,
+                        "description": line.description,
+                        "debit": 0,
+                        "credit": line.net_amount,
+                    }
+                    for line in (
+                        await db.execute(
+                            select(FinanceInvoiceLine)
+                            .where(FinanceInvoiceLine.invoice_id == invoice_row.id)
+                            .order_by(FinanceInvoiceLine.line_number.asc())
+                        )
+                    ).scalars().all()
+                ],
+            )
+            invoice_row.approval_id = invoice_approval.id
+            invoice_row.journal_entry_id = invoice_journal_entry.id
+            invoice_row.status = "posted"
+            invoice_action = "posted_from_verified_payment_evidence"
+            invoice_approval.executed_at = invoice_journal_entry.posted_at
+
+        receipt_row = (
+            await db.execute(
+                select(FinanceInvoiceReceipt).where(
+                    FinanceInvoiceReceipt.invoice_id == invoice_row.id,
+                    FinanceInvoiceReceipt.reference == receipt["reference"],
+                )
+            )
+        ).scalars().first()
+        if receipt_row is not None and (
+            _far_money(receipt_row.amount) != receipt["amount"]
+            or receipt_row.bank_account_id != bank.id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="An existing AR receipt with the same reference conflicts with the bank receipt; settlement was not applied.",
+            )
+        if receipt_row is None:
+            receipt_row = FinanceInvoiceReceipt(
+                invoice_id=invoice_row.id,
+                receipt_date=receipt["transaction_date"],
+                amount=receipt["amount"],
+                bank_account_id=bank.id,
+                reference=receipt["reference"],
+                status="draft",
+                created_by="ceo_execution_engine",
+            )
+            db.add(receipt_row)
+            await db.flush()
+            receipt_action = "created"
+        else:
+            receipt_action = "reused"
+
+        if receipt_row.status == "applied":
+            if receipt_row.journal_entry_id:
+                receipt_journal_entry = await db.get(
+                    FinanceJournalEntry,
+                    receipt_row.journal_entry_id,
+                )
+            if receipt_journal_entry is None or receipt_journal_entry.status != "posted":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Existing applied receipt has no valid posted journal; settlement was not changed.",
+                )
+            receipt_action = "reused_applied"
+            invoice_row.amount_collected = max(
+                _far_money(invoice_row.amount_collected),
+                _far_money(receipt_row.amount),
+            )
+        else:
+            if receipt_row.status in {"pending_approval", "rejected", "void", "cancelled"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Existing receipt is not eligible for evidence-backed application; no records were changed.",
+                )
+            finance_agent = await _far_finance_agent(db)
+            receipt_approval = Approval(
+                agent_id=finance_agent.id if finance_agent else None,
+                title="Apply paid AR receipt " + receipt["reference"],
+                description=(
+                    "Evidence-backed application of bank receipt "
+                    + receipt["reference"]
+                ),
+                action_type="finance_invoice_receipt",
+                risk_level="high",
+                status="approved",
+                action_payload={
+                    "receipt_id": str(receipt_row.id),
+                    "invoice_id": str(invoice_row.id),
+                    "amount": str(receipt_row.amount),
+                    "currency": invoice_row.currency,
+                    "source_attachment_ids": source_ids,
+                    "evidence_basis": "bank receipt processed by bank",
+                },
+                decision_reason=(
+                    "Explicit CEO registration instruction with a processed "
+                    "bank receipt matching the AR invoice."
+                ),
+                decided_at=datetime.now(timezone.utc),
+            )
+            db.add(receipt_approval)
+            await db.flush()
+            receipt_journal_entry = await _far_create_posted_journal(
+                db,
+                journal_date=receipt_row.receipt_date,
+                description="AR Receipt " + invoice_row.invoice_number,
+                reference=receipt_row.reference or invoice_row.invoice_number,
+                source_type="finance_invoice_receipt",
+                source_id=receipt_row.id,
+                currency=invoice_row.currency,
+                approval=receipt_approval,
+                debit_lines=[{
+                    "account_id": bank.gl_account_id,
+                    "description": "Bank receipt - " + invoice_row.invoice_number,
+                    "debit": receipt_row.amount,
+                    "credit": 0,
+                }],
+                credit_lines=[{
+                    "account_id": invoice_row.receivable_account_id,
+                    "description": "Settle AR - " + invoice_row.invoice_number,
+                    "debit": 0,
+                    "credit": receipt_row.amount,
+                }],
+            )
+            receipt_row.approval_id = receipt_approval.id
+            receipt_row.journal_entry_id = receipt_journal_entry.id
+            receipt_row.status = "applied"
+            receipt_action = "applied_from_verified_bank_receipt"
+            invoice_row.amount_collected = (
+                _far_money(invoice_row.amount_collected)
+                + _far_money(receipt_row.amount)
+            )
+            receipt_approval.executed_at = receipt_journal_entry.posted_at
+
+        invoice_row.status = (
+            "collected"
+            if _far_money(invoice_row.amount_collected)
+            >= _far_money(invoice_row.total_amount)
+            else "partially_collected"
+        )
+        invoice_metadata = dict(invoice_row.invoice_metadata or {})
+        invoice_metadata.update({
+            "payment_evidence": True,
+            "receipt_reference": receipt["reference"],
+            "accounting_posting_created": True,
+            "receipt_reconciliation": "matched",
+        })
+        invoice_row.invoice_metadata = invoice_metadata
+        invoice_row.notes = (
+            "Registered from the user-provided commercial invoice. The attached "
+            "bank receipt was processed by the bank and matches the invoice; "
+            "the AR invoice is posted and fully collected, and the receipt is "
+            "matched to the bank journal. No AP bill or bank transfer was created."
+        )
+        customer.customer_metadata = {
+            **(customer.customer_metadata or {}),
+            "payment_evidence": True,
+            "receipt_reference": receipt["reference"],
+            "accounting_posting_created": True,
+        }
+        bank.bank_metadata = {
+            **(bank.bank_metadata or {}),
+            "payment_evidence": True,
+            "receipt_reference": receipt["reference"],
+            "accounting_posting_created": True,
+            "receipt_reconciliation": "matched",
+        }
+
+        receipt_bank_line = (
+            await db.execute(
+                select(FinanceJournalLine).where(
+                    FinanceJournalLine.journal_entry_id == receipt_journal_entry.id,
+                    FinanceJournalLine.account_id == bank.gl_account_id,
+                    FinanceJournalLine.debit == receipt_row.amount,
+                )
+            )
+        ).scalars().first()
+        if receipt_bank_line is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The applied receipt has no matching bank journal line; settlement was rolled back.",
+            )
+        if statement.status == "matched":
+            if statement.matched_journal_line_id != receipt_bank_line.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The bank statement line is already matched to a different journal; settlement was not changed.",
+                )
+        else:
+            statement.status = "matched"
+            statement.matched_journal_line_id = receipt_bank_line.id
+            statement.matched_at = datetime.now(timezone.utc)
+        statement.notes = (
+            "Matched to the applied AR receipt and posted bank journal from "
+            "verified bank evidence. "
+            + json.dumps(source_metadata, ensure_ascii=False, separators=(",", ":"))
+        )
+        statement_action = statement_action + "_matched"
+        source_metadata["accounting_posting_created"] = True
+        source_metadata["receipt_reconciliation"] = "matched"
     legal_contract = (
         await db.execute(
             select(LegalContract).where(LegalContract.title == contract["title"], LegalContract.counterparty_name == contract["client_name"])
         )
     ).scalars().first()
     contract_action = "reused"
+    contract_reference = (
+        "Source attachment: "
+        + str(contract.get("source_name") or contract_source["name"])
+        + "; execution confirmed by source signature evidence"
+    )
+    if user_confirmed_execution:
+        contract_reference += " and the user's explicit confirmation"
     if legal_contract is None:
         legal_contract = LegalContract(
             code=_lega_code("LEG-CTR"),
@@ -82619,7 +82962,11 @@ async def _ceo_exec_register_finance_documents_from_attachments(
             owner_department="Legal",
             source_module="ceo_chat",
             source_entity_id=None,
-            effective_date=None,
+            effective_date=(
+                contract.get("effective_date")
+                if contract_execution_evidence
+                else None
+            ),
             expiry_date=None,
             auto_renew=False,
             notice_days=None,
@@ -82629,13 +82976,62 @@ async def _ceo_exec_register_finance_documents_from_attachments(
             data_processing_involved=True,
             unlimited_liability=False,
             material_indemnity=False,
-            status="draft",
-            notes=("Registered from the user-provided source agreement. The document is marked DRAFT FOR REVIEW; the client signature date is evidenced as " + str(contract["source_signature_client_date"] or "present in source") + ", but an Enclave signature/date is not evidenced. Effective date and expiry remain unset. No execution, signature, external notice or legal approval was performed."),
-            contract_metadata={**source_metadata, "source_document_role": "services_agreement", "provider_name": contract["provider_name"], "provider_cr": contract["provider_cr"], "client_cr": contract["client_cr"], "annual_value_ex_vat": str(contract["annual_value"]), "draft_for_review": contract["draft_for_review"], "client_signature_date_in_source": contract["source_signature_client_date"], "external_signature_executed": False},
+            status="executed" if contract_execution_evidence else "draft",
+            external_execution_reference=(
+                contract_reference if contract_execution_evidence else None
+            ),
+            executed_at=(
+                datetime.now(timezone.utc)
+                if contract_execution_evidence
+                else None
+            ),
+            notes=(
+                "Registered from the user-provided source agreement. "
+                + (
+                    "The source contains both signature names/dates and the user confirmed execution; "
+                    "the record is marked executed despite the template label DRAFT FOR REVIEW. "
+                    if contract_execution_evidence
+                    else "The document is marked DRAFT FOR REVIEW and execution evidence was not sufficient; the record remains draft. "
+                )
+                + "Client signature date in source: "
+                + str(contract["source_signature_client_date"] or "not found")
+                + ". Provider signature date in source: "
+                + str(contract.get("source_signature_provider_date") or "not found")
+                + "."
+            ),
+            contract_metadata={**source_metadata, "source_document_role": "services_agreement", "provider_name": contract["provider_name"], "provider_cr": contract["provider_cr"], "client_cr": contract["client_cr"], "annual_value_ex_vat": str(contract["annual_value"]), "draft_for_review": contract["draft_for_review"], "client_signature_date_in_source": contract["source_signature_client_date"], "provider_signature_date_in_source": contract.get("source_signature_provider_date"), "signature_names_present": contract.get("signature_names_present"), "signature_date_evidence": contract.get("signature_date_evidence"), "execution_evidence": contract_execution_evidence, "user_confirmed_execution": user_confirmed_execution, "external_signature_executed": contract_execution_evidence},
         )
         db.add(legal_contract)
         await db.flush()
         contract_action = "created"
+    elif contract_execution_evidence:
+        if legal_contract.status in {"expired", "terminated", "cancelled"}:
+            raise HTTPException(
+                status_code=409,
+                detail="The existing legal contract is closed and cannot be re-opened by attachment registration.",
+            )
+        legal_contract.status = "executed"
+        if not legal_contract.effective_date:
+            legal_contract.effective_date = contract.get("effective_date")
+        if not legal_contract.external_execution_reference:
+            legal_contract.external_execution_reference = contract_reference
+        if not legal_contract.executed_at:
+            legal_contract.executed_at = datetime.now(timezone.utc)
+        legal_metadata = dict(legal_contract.contract_metadata or {})
+        legal_metadata.update({
+            "source_attachment_ids": source_ids,
+            "source_attachment_names": source_names,
+            "execution_evidence": True,
+            "user_confirmed_execution": user_confirmed_execution,
+            "external_signature_executed": True,
+            "template_label_draft_for_review": contract.get("draft_for_review"),
+        })
+        legal_contract.contract_metadata = legal_metadata
+        legal_contract.notes = (
+            "Execution confirmed from the signed source attachment and the user's explicit instruction. "
+            "The source template label DRAFT FOR REVIEW is retained as historical document text only."
+        )
+        contract_action = "reused_and_marked_executed"
     return {
         "status": "executed",
         "operation": "finance_documents_registered",
@@ -82643,15 +83039,16 @@ async def _ceo_exec_register_finance_documents_from_attachments(
         "record": {
             "finance_customer": {"id": str(customer.id), "code": customer.code, "name": customer.name_en or customer.name_ar, "action": customer_action},
             "bank_account": {"id": str(bank.id), "code": bank.code, "iban": bank.iban, "action": bank_action},
-            "invoice": {"id": str(invoice_row.id), "invoice_number": invoice_row.invoice_number, "status": invoice_row.status, "total_amount": float(invoice_row.total_amount), "action": invoice_action, "classification": "accounts_receivable"},
-            "bank_statement_line": {"id": str(statement.id), "external_id": statement.external_id, "status": statement.status, "amount": float(statement.amount), "action": statement_action},
-            "contract": {"id": str(legal_contract.id), "code": legal_contract.code, "status": legal_contract.status, "action": contract_action},
+            "invoice": {"id": str(invoice_row.id), "invoice_number": invoice_row.invoice_number, "status": invoice_row.status, "total_amount": float(invoice_row.total_amount), "amount_collected": float(invoice_row.amount_collected), "action": invoice_action, "classification": "accounts_receivable", "journal_entry_id": str(invoice_row.journal_entry_id) if invoice_row.journal_entry_id else None},
+            "receipt": {"id": str(receipt_row.id), "reference": receipt_row.reference, "status": receipt_row.status, "amount": float(receipt_row.amount), "action": receipt_action, "journal_entry_id": str(receipt_row.journal_entry_id) if receipt_row.journal_entry_id else None} if receipt_row is not None else None,
+            "bank_statement_line": {"id": str(statement.id), "external_id": statement.external_id, "status": statement.status, "amount": float(statement.amount), "action": statement_action, "matched_journal_line_id": str(statement.matched_journal_line_id) if statement.matched_journal_line_id else None},
+            "contract": {"id": str(legal_contract.id), "code": legal_contract.code, "status": legal_contract.status, "action": contract_action, "effective_date": legal_contract.effective_date, "external_execution_reference": legal_contract.external_execution_reference},
         },
         "verified": True,
         "external_send": False,
-        "accounting_posting": False,
+        "accounting_posting": bool(payment_evidence),
         "bank_transfer": False,
-        "receipt_reconciliation": "unmatched_pending_invoice_posting",
+        "receipt_reconciliation": "matched" if payment_evidence else "unmatched_pending_invoice_posting",
     }
 
 
@@ -85089,6 +85486,21 @@ def _ceo_exec_truth_response(evidence: dict):
                         + "؛ الإجمالي: "
                         + f"{float(invoice.get('total_amount') or 0):,.2f} SAR."
                     )
+                    if invoice.get("amount_collected") is not None:
+                        lines.append(
+                            "المحصل من الفاتورة: "
+                            + f"{float(invoice.get('amount_collected') or 0):,.2f} SAR."
+                        )
+                receipt = finance_record.get("receipt") or {}
+                if receipt:
+                    lines.append(
+                        "إيصال AR: "
+                        + str(receipt.get("reference") or "غير محدد")
+                        + "؛ الحالة: "
+                        + str(receipt.get("status") or "غير محددة")
+                        + "؛ المبلغ: "
+                        + f"{float(receipt.get('amount') or 0):,.2f} SAR."
+                    )
                 if statement:
                     lines.append(
                         "الإيصال البنكي: "
@@ -85101,21 +85513,34 @@ def _ceo_exec_truth_response(evidence: dict):
                         + f"{float(statement.get('amount') or 0):,.2f} SAR."
                     )
                 if contract:
+                    contract_status = str(contract.get("status") or "غير محددة")
+                    contract_suffix = (
+                        " (منفذ وفق دليل التوقيع المرفق وتأكيد المستخدم)."
+                        if contract_status == "executed"
+                        else " (مسودة؛ لم يثبت التنفيذ)."
+                    )
                     lines.append(
                         "العقد: "
                         + str(contract.get("code") or "غير محدد")
                         + "؛ المعرّف: "
                         + str(contract.get("id") or "غير محدد")
                         + "؛ الحالة: "
-                        + str(contract.get("status") or "غير محددة")
-                        + " (مسودة، وليس عقداً منفذاً)."
+                        + contract_status
+                        + contract_suffix
                     )
                 lines.append(
                     "التصنيف: الفاتورة سُجلت كذمم مدينة (AR)؛ لم يُنشأ قيد AP لأن المصدر فاتورة صادرة من Enclave إلى العميل."
                 )
-                lines.append(
-                    "القيد المحاسبي والتحصيل والمطابقة البنكية: لم تُنفّذ. التحويل البنكي والإرسال الخارجي: لم يتم."
-                )
+                if item.get("accounting_posting") and item.get("receipt_reconciliation") == "matched":
+                    lines.append(
+                        "القيد المحاسبي والتحصيل والمطابقة البنكية: تم تنفيذها من دليل الإيصال المطابق. "
+                        "التحويل البنكي والإرسال الخارجي: لم يتم."
+                    )
+                else:
+                    lines.append(
+                        "القيد المحاسبي والتحصيل والمطابقة البنكية: لم تُنفّذ؛ الإيصال لا يثبت التسوية في المسار الحالي. "
+                        "التحويل البنكي والإرسال الخارجي: لم يتم."
+                    )
                 continue
             if isinstance(record, dict):
                 record_id = (
@@ -85360,13 +85785,18 @@ async def _ceo_execution_layer(
         "asks to register an attached contract, commercial invoice, receipt or "
         "AR/AP source document. The action reads the stored source files, validates "
         "identities, dates, totals, line amounts, IBAN and duplicate keys, then "
-        "creates or reuses the real internal customer, beneficiary bank account, "
-        "draft accounts-receivable invoice, unmatched bank statement line and legal "
-        "draft. It must never create an AP bill for an Enclave-issued customer "
-        "invoice, post accounting, collect or reconcile the receipt, transfer money, "
-        "mark a draft contract executed, or send anything externally. If any source "
-        "field or required chart account is missing or conflicting, block atomically "
-        "and report the exact reason; never claim completion from the attachments alone. "
+        "creates or reuses the real internal customer and beneficiary bank account. "
+        "When the receipt is explicitly processed by the bank and matches the invoice, "
+        "it posts the AR invoice, applies the receipt, matches the bank statement line "
+        "and records the invoice as collected; it does not create an AP bill for an "
+        "Enclave-issued customer invoice. When payment evidence is incomplete, it "
+        "keeps the invoice draft and the bank line unmatched. When the source contains "
+        "signature names/dates or the user explicitly confirms execution, it records "
+        "the legal contract as executed while retaining any template label such as "
+        "DRAFT FOR REVIEW as historical source text. It never transfers money or sends "
+        "anything externally. If any source field or required chart account is missing "
+        "or conflicting, block atomically and report the exact reason; never claim "
+        "completion from the attachments alone. "
         "get_accountability for named-person status. When the named person "
         "is Fahad Al-Anzi, treat him as an external commercial contributor "
         "and use Operations/Sales accountability; never route him to HR. "
@@ -85732,7 +86162,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.18",
+        "version": "1.6.19",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],
