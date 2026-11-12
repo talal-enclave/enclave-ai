@@ -78544,6 +78544,7 @@ _CEO_EXEC_ACTIONS = {
     "get_client_state",
     "get_proposal_readiness",
     "get_finance_status",
+    "get_bank_balance",
     "get_daily_report",
     "get_accountability",
     "create_sales_account",
@@ -80844,6 +80845,18 @@ async def _ceo_exec_snapshot(db: AsyncSession):
     }
 
 
+async def _ceo_exec_bank_balance_snapshot(db: AsyncSession):
+    """Read the live bank cash position, not the generic executive dashboard."""
+
+    from zoneinfo import ZoneInfo
+
+    as_of_date = datetime.now(ZoneInfo("Asia/Riyadh")).date()
+    return await finance_report_cash_position(
+        as_of_date=as_of_date,
+        db=db,
+    )
+
+
 async def _ceo_exec_find_account(db: AsyncSession, client_name: str):
     name = str(client_name or "").strip()
     if not name:
@@ -82048,6 +82061,14 @@ async def _ceo_exec_action(
             "evidence": await commercial_finance_dashboard(db),
         }
 
+    if action_type == "get_bank_balance":
+        return {
+            **base,
+            "status": "read_only",
+            "operation": "bank_balance_read",
+            "evidence": await _ceo_exec_bank_balance_snapshot(db),
+        }
+
     if action_type == "get_daily_report":
         return {
             **base,
@@ -83170,6 +83191,11 @@ def _ceo_exec_override_dashboard_plan(plan: dict, source_text: str):
             "metrics",
             "live",
             "from the system",
+            "كم موجود",
+            "الرصيد",
+            "bank balance",
+            "cash balance",
+            "cash position",
         )
     )
     request_word = any(
@@ -83228,6 +83254,61 @@ def _ceo_exec_override_dashboard_plan(plan: dict, source_text: str):
             }
         ],
         "routing": "deterministic_live_dashboard_read",
+    }
+
+
+def _ceo_exec_override_bank_balance_plan(plan: dict, source_text: str):
+    """Route bank-balance questions to the live cash-position read."""
+
+    folded = str(source_text or "").casefold()
+    bank_word = any(
+        marker in folded
+        for marker in (
+            "الحساب البنكي",
+            "الحسابات البنكية",
+            "حساب بنكي",
+            "حسابات بنكية",
+            "الرصيد البنكي",
+            "رصيد البنك",
+            "البنك",
+            "bank account",
+            "bank balance",
+            "cash balance",
+            "cash position",
+            "cash in bank",
+        )
+    )
+    balance_word = any(
+        marker in folded
+        for marker in (
+            "كم موجود",
+            "كم فيه",
+            "كم الرصيد",
+            "وش الرصيد",
+            "ما هو الرصيد",
+            "الرصيد",
+            "balance",
+            "how much",
+            "what is in",
+        )
+    )
+    if not (bank_word and balance_word):
+        return plan
+
+    return {
+        "handled": True,
+        "title": "Read live bank balance",
+        "client_name_exact": None,
+        "blocked_reason": None,
+        "actions": [
+            {
+                "type": "get_bank_balance",
+                "agent_slug": "finance",
+                "title": "Read current bank cash position",
+                "data": {},
+            }
+        ],
+        "routing": "deterministic_live_bank_balance_read",
     }
 
 
@@ -83907,6 +83988,11 @@ def _ceo_exec_is_record_lookup_request(source_text: str):
             "how many",
             "live",
             "from the system",
+            "كم موجود",
+            "الرصيد",
+            "bank balance",
+            "cash balance",
+            "cash position",
         )
     )
     record_word = any(
@@ -83955,6 +84041,13 @@ def _ceo_exec_is_record_lookup_request(source_text: str):
             "campaign",
             "policy",
             "record",
+            "الحساب البنكي",
+            "الحسابات البنكية",
+            "حساب بنكي",
+            "البنك",
+            "bank account",
+            "bank",
+            "cash",
         )
     )
     return lookup_word and record_word and (
@@ -84071,6 +84164,35 @@ def _ceo_exec_truth_response(evidence: dict):
                     "مصدر التحقق: "
                     + str(live_evidence.get("source") or "HRVacancy")
                     + "."
+                )
+            elif item.get("type") == "get_bank_balance":
+                as_of_date = live_evidence.get("as_of_date")
+                total_cash = live_evidence.get("total_cash_position")
+                if total_cash is not None:
+                    lines.append(
+                        "إجمالي الرصيد النقدي في الحسابات البنكية"
+                        + (f" حتى {as_of_date}" if as_of_date else "")
+                        + ": "
+                        + f"{float(total_cash):,.2f} SAR."
+                    )
+                banks = live_evidence.get("banks") or []
+                if banks:
+                    for bank in banks:
+                        bank_name = (
+                            bank.get("account_name")
+                            or bank.get("bank_name")
+                            or bank.get("code")
+                            or "حساب بنكي"
+                        )
+                        balance = bank.get("balance")
+                        currency = bank.get("currency") or "SAR"
+                        if balance is not None:
+                            lines.append(
+                                f"{bank_name}: {float(balance):,.2f} {currency}."
+                            )
+                lines.append(
+                    "مصدر التحقق: سجل الوضع النقدي البنكي المباشر "
+                    "(/api/finance/reports/cash-position)."
                 )
             else:
                 compact = json.dumps(
@@ -84363,7 +84485,10 @@ async def _ceo_execution_layer(
         "For every direct create/update/register instruction, if no supported "
         "database action is selected, return blocked and do not delegate it as if "
         "a specialist task were execution. Specialist prose is never write evidence. "
-        "Use get_finance_status for finance/billing status, "
+        "Use get_bank_balance for questions about the current bank balance, "
+        "cash position or money in bank accounts. Never answer those questions "
+        "from /api/dashboard or a generic task summary. Use get_finance_status "
+        "only for commercial quotations, invoices and billing status. "
         "get_accountability for named-person status. When the named person "
         "is Fahad Al-Anzi, treat him as an external commercial contributor "
         "and use Operations/Sales accountability; never route him to HR. "
@@ -84502,6 +84627,11 @@ async def _ceo_execution_layer(
         source_text,
     )
 
+    plan = _ceo_exec_override_bank_balance_plan(
+        plan,
+        source_text,
+    )
+
     plan = _ceo_exec_override_non_employee_workers_plan(
         plan,
         source_text,
@@ -84557,6 +84687,7 @@ async def _ceo_execution_layer(
             "list_pending_tasks",
             "get_hr_vacancy_state",
             "get_finance_status",
+            "get_bank_balance",
             "get_daily_report",
             "get_accountability",
             "get_client_state",
@@ -84718,7 +84849,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.16",
+        "version": "1.6.17",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

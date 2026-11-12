@@ -1,3 +1,18 @@
+# Enclave v1.6.17 — Truthful bank-balance reads
+
+This release fixes CEO finance lookups that were incorrectly answered from the
+generic executive dashboard.
+
+- Bank-balance and cash-position questions use the live bank cash-position
+  register and return the total plus each active bank account balance.
+- The generic `/api/dashboard` task/conversation summary is no longer accepted
+  as evidence for a bank balance.
+- The response includes the as-of date and the exact live finance source.
+- This is read-only; it does not create payments, transfers, journal entries or
+  external actions.
+
+---
+
 # Enclave v1.6.16 — Reliable vacancy creation
 
 This release hardens the internal HR vacancy write path after a vacancy request
