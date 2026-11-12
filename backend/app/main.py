@@ -82005,6 +82005,16 @@ def _ceo_finance_source_rows(rows):
                 "invoice_candidate": bool(
                     re.search(r"invoice\s*(?:no|number)|commercial invoice|فاتورة", haystack)
                 ),
+                "invoice_strong_candidate": bool(
+                    re.search(
+                        r"invoice\s*(?:no|number)|total\s+amount\s+due|commercial\s+invoice",
+                        haystack,
+                    )
+                    and re.search(
+                        r"invoice\s*(?:no|number)|total\s+amount\s+due",
+                        haystack,
+                    )
+                ),
                 "receipt_candidate": bool(
                     re.search(
                         r"tbc\d+|beneficiary|transaction\s+date|bank statement|إيصال|تحويل محلي|المستفيد",
@@ -82297,7 +82307,19 @@ async def _ceo_exec_register_finance_documents_from_attachments(
     ).scalars().all()
     sources = _ceo_finance_source_rows(rows)
     invoice_source = next(
-        (item for item in reversed(sources) if item["invoice_candidate"] and "awaed" in item["haystack"]),
+        (
+            item
+            for item in reversed(sources)
+            if item["invoice_strong_candidate"]
+            and "awaed" in item["haystack"]
+        ),
+        None,
+    ) or next(
+        (
+            item
+            for item in reversed(sources)
+            if item["invoice_strong_candidate"]
+        ),
         None,
     ) or next((item for item in reversed(sources) if item["invoice_candidate"]), None)
     receipt_source = next(
@@ -82404,7 +82426,15 @@ async def _ceo_exec_register_finance_documents_from_attachments(
     if missing_fields:
         return {
             "status": "blocked",
-            "reason": "Required source fields are missing: " + ", ".join(missing_fields) + ". No records were written.",
+            "reason": (
+                "Required source fields are missing: "
+                + ", ".join(missing_fields)
+                + ". Selected invoice attachment: "
+                + str(invoice_source.get("name") or "unknown")
+                + "; extracted characters: "
+                + str(len(str(invoice_source.get("text") or "")))
+                + ". No records were written."
+            ),
         }
 
     payment_evidence = bool(
@@ -86162,7 +86192,7 @@ async def ceo_execution_capabilities(
     snapshot = await _ceo_exec_snapshot(db)
 
     return {
-        "version": "1.6.19",
+        "version": "1.6.20",
         "mode": "evidence_first_execution_with_artifacts",
         "allowed_actions": sorted(_CEO_EXEC_ACTIONS),
         "artifact_generation": snapshot["artifact_generation"],

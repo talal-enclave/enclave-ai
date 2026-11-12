@@ -1,12 +1,15 @@
-# Enclave v1.6.19 — Evidence-backed paid invoice and signed contract registration
+# Enclave v1.6.20 — Deterministic finance attachment role selection
 
-This release corrects the previous conservative classification of the attached
-Awaed records. The source contract contains signature names and dates and the
-bank receipt proves settlement of the matching invoice.
+This release fixes attachment-role selection when a services agreement contains
+the word `invoice` in its payment clauses. The invoice parser now selects the
+document with a real invoice number and total instead of relying on upload order.
 
-- Reads the stored CEO conversation attachments directly and validates the
-  source invoice number, dates, client CR, line totals, zero-VAT statement,
-  receipt reference, amount, bank-processing status and beneficiary IBAN.
+- Reads the stored CEO conversation attachments directly and deterministically
+  selects the commercial invoice using `Invoice No.`/`TOTAL AMOUNT DUE`, then
+  validates dates, client CR, line totals, zero-VAT statement, receipt
+  reference, amount, bank-processing status and beneficiary IBAN.
+- Prevents the contract's payment-clause text from being misclassified as the
+  invoice when attachments are uploaded in a different order.
 - Creates or reuses the real finance customer and beneficiary bank account.
 - When the receipt is processed by the bank and matches the invoice, posts the
   AR invoice, applies the receipt, marks the invoice `collected`, and matches
